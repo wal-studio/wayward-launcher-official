@@ -1,5 +1,8 @@
 # Wayward Launcher — Official 1.0.6
 
+> The version in this title identifies the documented official release only; it is not a development branch, commit, or baseline selector. Current development follows the repository's global baseline policy.
+
+
 공식 배포 전용 저장소입니다. 개발용 diethoon/wayward 저장소와 독립적으로 유지합니다.
 
 ## 최초 배포 범위
