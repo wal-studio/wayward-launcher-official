@@ -50,10 +50,11 @@ CI는 업로드된 P12의 크기(2,858 bytes), P12 비밀번호, 개인키-인�
 
 키 파일과 암호는 저장소 파일이나 코드에 넣지 않습니다. 세 secret 중 하나라도 없으면 CI는 Debug APK와 unsigned Release APK를 생성합니다.
 
-## 기준
-- 개발 저장소: https://github.com/diethoon/wayward
-- 기준 커밋: 9c52b690229808c9f6b188fcf55c073468b81341
-- 기준 경로: android-external-folder-launcher/
+## 원본 계보 및 현재 기준
+- 원본 개발 저장소: https://github.com/diethoon/wayward
+- 최초 유입 경로: `android-external-folder-launcher/`
+- 최초 유입 커밋 `9c52b690229808c9f6b188fcf55c073468b81341`은 과거 소스 계보를 식별하기 위한 기록이며, 현재 개발 기준점이 아니다.
+- 현재 개발 기준점은 이 저장소에서 직전 작업으로 실제 완료·검증한 결과다. 특정 커밋이나 버전은 사용자가 해당 작업 착수 전에 명시한 경우에만 그 작업 범위에서 예외적으로 사용한다.
 
 ## 검증 상태
 `.github/workflows/android-validation.yml`은 PR 생성/갱신 및 `main`, `work/**` 브랜치 push 시 자동 실행됩니다. Actions secrets가 모두 등록된 경우 PKCS#12를 임시 JKS로 변환해 Release APK에 서명하고, APK 인증서 SHA-1이 등록된 Android OAuth 지문과 일치하는지 확인합니다. 해당 워크플로에는 Node 문법 검사, 공식 런처 범위 검사, Google OAuth 브리지 계약 테스트, Gradle 8.9 Debug/Release APK 빌드, Android 15 에뮬레이터 시작 검사는 각 ADB 명령의 결과를 파일로 기록하고 단일 검사 명령으로 앱 프로세스와 crash 로그를 확인합니다.
