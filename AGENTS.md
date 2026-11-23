@@ -103,3 +103,6 @@ Do not repeat the same facts under multiple headings. Separate verified facts fr
 - `docs/FORENSIC_AND_VERIFICATION_POLICY.md`
 
 Read all three documents before inspecting code, branches, services, CI, or starting implementation. If any is unavailable, restore it when authorized or stop product work and report the exact blocker. This requirement supplements all repository-specific instructions below; preserve their CI, build, ownership, and platform-specific rules. The global forensic, evidence-integrity, safety, and data-preservation rules cannot be weakened.
+
+## Global development baseline
+Read and follow [GLOBAL_DEVELOPMENT_BASELINE.md](GLOBAL_DEVELOPMENT_BASELINE.md). It is mandatory for every task and branch. The latest actually completed and verified prior result is the default baseline; user-specified exceptions are scoped to the named task only. Carry this file into every new branch and repair missing/stale copies in existing branches.
