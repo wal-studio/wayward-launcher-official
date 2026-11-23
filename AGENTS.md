@@ -119,3 +119,8 @@ The required sequence is:
 **Completion is forbidden** until relevant available evidence has been inspected, the minimal diff is justified, incremental tests have been checked, and final state is verified. If required evidence is unavailable, report PARTIALLY VERIFIED / BLOCKED.
 
 This is mandatory on every branch and for every contributor/agent. It supplements project-specific rules; preserve stricter platform, security, CI, and ownership constraints.
+
+<!-- GLOBAL-DEVELOPMENT-BASELINE:START -->
+
+공통 기준점·브랜치 전파 규정은 [GLOBAL_DEVELOPMENT_BASELINE.md](GLOBAL_DEVELOPMENT_BASELINE.md)를 따른다. 신규 브랜치 생성 시 이 문서를 복사하고 기존 브랜치의 누락을 복구한다.
+<!-- GLOBAL-DEVELOPMENT-BASELINE:END -->
