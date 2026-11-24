@@ -855,7 +855,7 @@ public class MainActivity extends Activity {
         String domain=sessionDomain(activeProfileId);
         String origin=sessionOrigin(activeProfileId);
         int originPort=sessionPort(activeProfileId);
-        web=new WebView(this);imagePackDiagnosticSessionId=ImagePackDiagnostics.newSessionId();WebSettings s=web.getSettings();s.setJavaScriptEnabled(true);s.setDomStorageEnabled(true);s.setDatabaseEnabled(true);s.setUseWideViewPort(true);s.setLoadWithOverviewMode(true);s.setTextZoom(100);s.setSupportZoom(true);s.setBuiltInZoomControls(false);s.setDisplayZoomControls(false);s.setAllowFileAccess(false);s.setAllowContentAccess(false);s.setCacheMode(WebSettings.LOAD_DEFAULT);s.setMixedContentMode(WebSettings.MIXED_CONTENT_NEVER_ALLOW);imagePackDirectoryAccess=new ImagePackDirectoryAccess(this,web,activeProfileId,imagePackDiagnosticSessionId);imagePackDirectoryAccess.onResume();web.addJavascriptInterface(new HostBridge(),"WMLHost");
+        web=new WebView(this);imagePackDiagnosticSessionId=ImagePackDiagnostics.newSessionId();googleAuthBridgeCapability=ImagePackFolderPickerScript.createCapability();WebSettings s=web.getSettings();s.setJavaScriptEnabled(true);s.setDomStorageEnabled(true);s.setDatabaseEnabled(true);s.setUseWideViewPort(true);s.setLoadWithOverviewMode(true);s.setTextZoom(100);s.setSupportZoom(true);s.setBuiltInZoomControls(false);s.setDisplayZoomControls(false);s.setAllowFileAccess(false);s.setAllowContentAccess(false);s.setCacheMode(WebSettings.LOAD_DEFAULT);s.setMixedContentMode(WebSettings.MIXED_CONTENT_NEVER_ALLOW);imagePackDirectoryAccess=new ImagePackDirectoryAccess(this,web,activeProfileId,imagePackDiagnosticSessionId);imagePackDirectoryAccess.onResume();web.addJavascriptInterface(new HostBridge(),"WMLHost");
         installGoogleAuthBridgeScript(origin);
         installImageGenDocumentStartScript(origin);
         installImagePackFolderPickerScript(origin);
@@ -1023,8 +1023,7 @@ public class MainActivity extends Activity {
 
     private void installWebDownloadBridgeScript(String origin) {
         webDownloadBridgeScript = null;
-        if (web == null || origin == null || origin.isEmpty()
-                || !WebViewFeature.isFeatureSupported(WebViewFeature.DOCUMENT_START_SCRIPT)) return;
+        if (web == null || origin == null || origin.isEmpty()) return;
         try (InputStream input = getAssets().open("wayward-download-bridge.js");
              ByteArrayOutputStream output = new ByteArrayOutputStream()) {
             byte[] buffer = new byte[4096];
@@ -1038,8 +1037,12 @@ public class MainActivity extends Activity {
             if (!script.contains(placeholder)) throw new IllegalStateException("Download bridge capability placeholder is missing.");
             script = script.replace(placeholder, googleAuthBridgeCapability);
             webDownloadBridgeScript = script;
-            WebViewCompat.addDocumentStartJavaScript(web, script, Collections.singleton(origin));
-            DiagnosticsLogger.event(this, "INFO", "webview", "blob_download_bridge_installed", null);
+            if (WebViewFeature.isFeatureSupported(WebViewFeature.DOCUMENT_START_SCRIPT)) {
+                WebViewCompat.addDocumentStartJavaScript(web, script, Collections.singleton(origin));
+                DiagnosticsLogger.event(this, "INFO", "webview", "blob_download_bridge_document_start_registered", null);
+            } else {
+                DiagnosticsLogger.event(this, "WARN", "webview", "blob_download_bridge_runtime_fallback_enabled", null);
+            }
         } catch (Throwable error) {
             webDownloadBridgeScript = null;
             DiagnosticsLogger.error(this, "webview", "blob_download_bridge_install_failed", error);
@@ -1139,7 +1142,6 @@ public class MainActivity extends Activity {
     }
 
     private void installGoogleAuthBridgeScript(String gameOrigin){
-        googleAuthBridgeCapability="";
         if(web==null||gameOrigin==null||gameOrigin.isEmpty())return;
         if(!WebViewFeature.isFeatureSupported(WebViewFeature.DOCUMENT_START_SCRIPT)){
             DiagnosticsLogger.event(this,"WARN","oauth","document_start_script_unavailable",null);
@@ -1152,7 +1154,6 @@ public class MainActivity extends Activity {
                 output.write(buffer,0,count);
                 if(output.size()>64*1024)throw new IllegalStateException("Google auth bridge script is too large.");
             }
-            googleAuthBridgeCapability=ImagePackFolderPickerScript.createCapability();
             String script=new String(output.toByteArray(),StandardCharsets.UTF_8);
             String placeholder="__WAYWARD_GOOGLE_AUTH_CAPABILITY__";
             if(!script.contains(placeholder))throw new IllegalStateException("Google auth bridge capability placeholder is missing.");
@@ -1160,7 +1161,6 @@ public class MainActivity extends Activity {
             WebViewCompat.addDocumentStartJavaScript(web,script,Collections.singleton(gameOrigin));
             DiagnosticsLogger.event(this,"INFO","oauth","native_google_auth_bridge_installed",null);
         }catch(Throwable error){
-            googleAuthBridgeCapability="";
             DiagnosticsLogger.error(this,"oauth","native_google_auth_bridge_install_failed",error);
         }
     }
