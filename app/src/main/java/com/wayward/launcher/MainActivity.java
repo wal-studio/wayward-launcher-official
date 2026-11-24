@@ -53,6 +53,7 @@ import java.lang.ref.WeakReference;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.Collections;
 import java.util.HashSet;
@@ -74,6 +75,7 @@ public class MainActivity extends Activity {
     private static final Pattern ID=Pattern.compile("^[a-z0-9][a-z0-9._-]*$");
     private static final Set<String> RUNNING_SESSIONS=Collections.synchronizedSet(new HashSet<>());
     private static final Map<String,String> PENDING_GOOGLE_AUTH_RESULTS=new ConcurrentHashMap<>();
+    private final Set<String> ownedGoogleAuthResultNonces=Collections.newSetFromMap(new ConcurrentHashMap<String,Boolean>());
     // The home launcher and game sessions are separate Android document tasks.
     // Keep weak references so settings actions can return to the Activity that
     // actually owns the active game's WebView and SAF tree.
@@ -1073,6 +1075,7 @@ public class MainActivity extends Activity {
             }
         }
         PENDING_GOOGLE_AUTH_RESULTS.remove(nonce);
+        ownedGoogleAuthResultNonces.remove(nonce);
     }
 
     private void beginGoogleDriveAuth(String nonce,boolean forceSelectAccount){
@@ -1124,7 +1127,7 @@ public class MainActivity extends Activity {
         }
     }
 
-    private static void storeGoogleAuthResult(String nonce,String accessToken,String error){
+    private void storeGoogleAuthResult(String nonce,String accessToken,String error){
         if(nonce==null||!nonce.matches("[a-f0-9]{48}"))return;
         JSONObject payload=new JSONObject();
         try{
@@ -1138,6 +1141,7 @@ public class MainActivity extends Activity {
                 payload.put("message",error==null?"Google에서 액세스 토큰을 반환하지 않았습니다.":error);
             }
             PENDING_GOOGLE_AUTH_RESULTS.put(nonce,payload.toString());
+            ownedGoogleAuthResultNonces.add(nonce);
         }catch(Exception ignored){}
     }
 
@@ -1925,6 +1929,8 @@ public class MainActivity extends Activity {
         if(imagePackDirectoryAccess!=null){imagePackDirectoryAccess.cancelPending();imagePackDirectoryAccess.closeAllFileStreams();imagePackDirectoryAccess=null;}
         imagePackFolderPickerCapability="";imagePackFolderPickerScript=null;imagePackFolderPickerOrigin="";googleAuthBridgeCapability="";
     private void destroyWeb(){
+        if(!pendingGoogleAuthNonce.isEmpty())clearGoogleDriveAuthRequest(pendingGoogleAuthNonce);
+        for(String nonce:ownedGoogleAuthResultNonces)clearGoogleDriveAuthRequest(nonce);
         if(imagePackDirectoryAccess!=null){
             imagePackDirectoryAccess.cancelPending();
             imagePackDirectoryAccess.closeAllFileStreams();
@@ -2113,6 +2119,7 @@ public class MainActivity extends Activity {
         @JavascriptInterface public String takePendingStateForNonce(String nonce,String capability){
             if(!hasGoogleAuthBridgeCapability(capability)||nonce==null||!nonce.matches("[a-f0-9]{48}"))return "";
             String result=PENDING_GOOGLE_AUTH_RESULTS.remove(nonce);
+            ownedGoogleAuthResultNonces.remove(nonce);
             return result==null?"":result;
         }
         @JavascriptInterface public void clearGoogleAccessToken(String token,String capability){
