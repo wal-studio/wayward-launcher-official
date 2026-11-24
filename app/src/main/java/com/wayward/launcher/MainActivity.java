@@ -1544,9 +1544,9 @@ public class MainActivity extends Activity {
                 // delivering the UI action on some Android document-task stacks.
                 try {
                     session.openImageGenPanel();
-                    Intent route = new Intent(this, MainActivity.class);
+                    Intent route = new Intent(this, GameSessionActivity.class);
                     route.setData(Uri.parse("wayward://session/" + Uri.encode(sessionId)));
-                    route.addFlags(Intent.FLAG_ACTIVITY_NEW_DOCUMENT | Intent.FLAG_ACTIVITY_REORDER_TO_FRONT);
+                    route.addFlags(Intent.FLAG_ACTIVITY_NEW_DOCUMENT);
                     startActivity(route);
                     DiagnosticsLogger.event(this,"INFO","imagegen","session_settings_routed",null);
                     return;
@@ -1558,8 +1558,12 @@ public class MainActivity extends Activity {
             return;
         }
         Runnable openSettings = () -> {
+            if (!IMAGE_MODE_GENERATION.equals(currentImageMode())) {
+                Toast.makeText(this, "런처에서 이미지 생성 모드를 선택한 뒤 Image Studio 생성 설정을 열 수 있습니다.", Toast.LENGTH_LONG).show();
+                return;
+            }
             ImageGenStatusStore.State state = ImageGenStatusStore.read(getFilesDir());
-            if (!state.isAvailable()) {
+            if (!state.isReady()) {
                 String detail = state.message == null || state.message.isEmpty()
                         ? "이미지 서버 응답을 확인하지 못했습니다." : state.message;
                 Toast.makeText(this,detail,Toast.LENGTH_LONG).show();
