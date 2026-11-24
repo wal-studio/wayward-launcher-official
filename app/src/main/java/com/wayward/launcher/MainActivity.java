@@ -59,7 +59,6 @@ import java.util.Collections;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
-import java.util.Set;
 import java.util.TreeSet;
 import java.util.UUID;
 import java.util.regex.Matcher;
@@ -71,6 +70,21 @@ public class MainActivity extends Activity {
     private static final String PREFS="wayward_launcher";
     private static final String KEY_TREE="game_tree_uri", KEY_PROFILES="game_profiles", KEY_ZIP_REV="zip_mod_revision", KEY_COMFY_URL="comfy_server_url", KEY_IMAGE_MODE="image_server_mode";
     private static final String IMAGE_MODE_PACKS_ONLY="image-packs-only", IMAGE_MODE_GENERATION="image-generation", IMAGE_MODE_REMOTE_PC="remote-pc";
+    private static final int MAX_DEFAULT_CHARACTER_CDN_REDIRECTS=3;
+    private static final int MAX_DEFAULT_CHARACTER_CDN_BYTES=12*1024*1024;
+    interface DefaultCharacterCdnConnectionFactory {
+        javax.net.ssl.HttpsURLConnection open(java.net.URL url) throws java.io.IOException;
+    }
+    private static volatile DefaultCharacterCdnConnectionFactory defaultCharacterCdnConnectionFactoryForTesting;
+    static void setDefaultCharacterCdnConnectionFactoryForTesting(DefaultCharacterCdnConnectionFactory factory){
+        defaultCharacterCdnConnectionFactoryForTesting=factory;
+    }
+    private javax.net.ssl.HttpsURLConnection openDefaultCharacterCdnConnection(String url) throws java.io.IOException{
+        DefaultCharacterCdnConnectionFactory factory=defaultCharacterCdnConnectionFactoryForTesting;
+        java.net.URL parsed=new java.net.URL(url);
+        return factory==null?(javax.net.ssl.HttpsURLConnection)parsed.openConnection():factory.open(parsed);
+    }
+
     private static final String KO="Wayward_WML_ko.html", EN="Wayward_WML.html";
     private static final Pattern ID=Pattern.compile("^[a-z0-9][a-z0-9._-]*$");
     private static final Set<String> RUNNING_SESSIONS=Collections.synchronizedSet(new HashSet<>());
@@ -970,6 +984,22 @@ public class MainActivity extends Activity {
                 Uri u=r.getUrl();
                 WebResourceResponse local=loader.shouldInterceptRequest(u);
                 if(local!=null)return local;
+                if(IMAGE_MODE_PACKS_ONLY.equals(currentImageMode())){
+                    String cdnPath=defaultCharacterCdnPath(u);
+                    if(cdnPath!=null){
+                        if(r.isForMainFrame())return null;
+                        String method=r.getMethod();
+                        if("HEAD".equalsIgnoreCase(method))return null;
+                        if(!"GET".equalsIgnoreCase(method)){
+                            return new WebResourceResponse("text/plain","UTF-8",405,"Method Not Allowed",
+                                    new java.util.HashMap<String,String>(),new java.io.ByteArrayInputStream(new byte[0]));
+                        }
+                        WebResourceResponse cdn=fetchDefaultCharacterCdnImage(u,imageDiagnostics);
+                        if(cdn!=null)return cdn;
+                        WebResourceResponse localFallback=serveImageRequest(folderHandler,cdnPath,imageDiagnostics);
+                        return localFallback!=null?localFallback:defaultCharacterCdnNotFoundResponse();
+                    }
+                }
                 if(domain.equalsIgnoreCase(u.getHost())&&u.getPort()==originPort){
                     String path=u.getPath();
                     if(FolderHandler.isGameRequestPath(path)){
@@ -1178,6 +1208,198 @@ public class MainActivity extends Activity {
                 ||lower.endsWith(".svg");
     }
 
+    private static String defaultCharacterCdnPath(Uri uri){
+        if(uri==null||!"https".equalsIgnoreCase(uri.getScheme())
+                ||!"art.sintention.com".equalsIgnoreCase(uri.getHost())
+                ||(uri.getPort()!=-1&&uri.getPort()!=443)
+                ||uri.getUserInfo()!=null||uri.getQuery()!=null||uri.getFragment()!=null)return null;
+        String encoded=uri.getEncodedPath();
+        if(encoded==null||encoded.length()>2048||encoded.indexOf('\\')>=0||encoded.indexOf('\0')>=0)return null;
+        for(int i=0;i<encoded.length();i++){
+            if(encoded.charAt(i)!='%')continue;
+            if(i+2>=encoded.length())return null;
+            int hi=Character.digit(encoded.charAt(i+1),16),lo=Character.digit(encoded.charAt(i+2),16);
+            if(hi<0||lo<0)return null;
+            int decoded=(hi<<4)|lo;
+            if(decoded==0x00||decoded==0x2e||decoded==0x2f||decoded==0x5c||decoded==0x25)return null;
+            i+=2;
+        }
+        String path=uri.getPath();
+        if(path==null||path.length()>2048||path.indexOf('\\')>=0||path.indexOf('\0')>=0)return null;
+        String[] segments=path.split("/",-1);
+        if(segments.length<7||!segments[0].isEmpty()||!"images".equals(segments[1])
+                ||!"illustrious".equals(segments[2])||!"situation".equals(segments[3])
+                ||!"info".equals(segments[4]))return null;
+        String character=segments[5];
+        if(!("elena".equals(character)||"mara".equals(character)||"pippa".equals(character)))return null;
+        for(int i=1;i<segments.length;i++){
+            String segment=segments[i];
+            if(segment.isEmpty()||".".equals(segment)||"..".equals(segment))return null;
+            for(int j=0;j<segment.length();j++)if(Character.isISOControl(segment.charAt(j)))return null;
+        }
+        String file=segments[segments.length-1];
+        if(file.length()>240||!file.matches("(?i).+\\.(png|jpe?g|webp|gif|avif)"))return null;
+        return path;
+    }
+
+    private WebResourceResponse fetchDefaultCharacterCdnImage(Uri original,java.util.concurrent.atomic.AtomicInteger samples){
+        if(original==null)return null;
+        String currentUrl=original.toString();
+        for(int redirects=0;redirects<=MAX_DEFAULT_CHARACTER_CDN_REDIRECTS;redirects++){
+            Uri target=Uri.parse(currentUrl);
+            String path=defaultCharacterCdnPath(target);
+            if(path==null){recordDefaultCharacterCdnEvent("default_character_cdn_rejected",target,"redirect_or_url_policy",samples);return null;}
+            javax.net.ssl.HttpsURLConnection connection=null;
+            try{
+                connection=openDefaultCharacterCdnConnection(currentUrl);
+                connection.setConnectTimeout(3500);
+                connection.setReadTimeout(5000);
+                connection.setInstanceFollowRedirects(false);
+                connection.setRequestMethod("GET");
+                connection.setUseCaches(false);
+                connection.setRequestProperty("Cookie","");
+                connection.setRequestProperty("Authorization","");
+                connection.setRequestProperty("Proxy-Authorization","");
+                connection.setRequestProperty("Accept-Encoding","identity");
+                connection.setRequestProperty("Accept","image/avif,image/webp,image/apng,image/png,image/jpeg,image/gif;q=0.9,*/*;q=0.1");
+                int status=connection.getResponseCode();
+                if(status>=300&&status<400){
+                    if(redirects>=MAX_DEFAULT_CHARACTER_CDN_REDIRECTS){
+                        recordDefaultCharacterCdnEvent("default_character_cdn_failed",target,"redirect_limit",samples);
+                        return null;
+                    }
+                    String location=connection.getHeaderField("Location");
+                    if(location==null||location.trim().isEmpty()){
+                        recordDefaultCharacterCdnEvent("default_character_cdn_failed",target,"redirect_without_location",samples);
+                        return null;
+                    }
+                    java.net.URL next=new java.net.URL(new java.net.URL(currentUrl),location);
+                    Uri nextUri=Uri.parse(next.toString());
+                    if(defaultCharacterCdnPath(nextUri)==null){
+                        recordDefaultCharacterCdnEvent("default_character_cdn_rejected",nextUri,"redirect_destination_not_allowed",samples);
+                        return null;
+                    }
+                    currentUrl=next.toString();
+                    continue;
+                }
+                if(status!=200){
+                    recordDefaultCharacterCdnEvent("default_character_cdn_failed",target,"http_"+status,samples);
+                    return null;
+                }
+                String rawMime=connection.getContentType();
+                String mime=rawMime==null?"":rawMime.split(";",2)[0].trim().toLowerCase(java.util.Locale.ROOT);
+                if(!isAllowedDefaultCharacterCdnMime(mime)){
+                    recordDefaultCharacterCdnEvent("default_character_cdn_failed",target,"invalid_mime",samples);
+                    return null;
+                }
+                long contentLength=connection.getContentLengthLong();
+                if(contentLength>MAX_DEFAULT_CHARACTER_CDN_BYTES){
+                    recordDefaultCharacterCdnEvent("default_character_cdn_failed",target,"image_too_large",samples);
+                    return null;
+                }
+                byte[] bytes;
+                try(java.io.InputStream input=connection.getInputStream()){
+                    bytes=readDefaultCharacterCdnBytes(input,MAX_DEFAULT_CHARACTER_CDN_BYTES);
+                }
+                if(contentLength>=0&&bytes.length!=contentLength){
+                    recordDefaultCharacterCdnEvent("default_character_cdn_failed",target,"truncated_response",samples);
+                    return null;
+                }
+                if(!isDecodableDefaultCharacterCdnImage(mime,bytes)){
+                    recordDefaultCharacterCdnEvent("default_character_cdn_failed",target,"invalid_image_signature",samples);
+                    return null;
+                }
+                java.util.Map<String,String> headers=new java.util.HashMap<>();
+                headers.put("Cache-Control","public, max-age=3600");
+                headers.put("Access-Control-Allow-Origin","*");
+                recordDefaultCharacterCdnEvent("default_character_cdn_loaded",target,"",samples);
+                return new WebResourceResponse(mime,null,200,"OK",headers,new java.io.ByteArrayInputStream(bytes));
+            }catch(Exception error){
+                recordDefaultCharacterCdnEvent("default_character_cdn_failed",target,error.getClass().getSimpleName(),samples);
+                return null;
+            }finally{
+                if(connection!=null)connection.disconnect();
+            }
+        }
+        return null;
+    }
+
+    private static boolean isAllowedDefaultCharacterCdnMime(String mime){
+        return "image/png".equals(mime)||"image/jpeg".equals(mime)||"image/webp".equals(mime)
+                ||"image/gif".equals(mime)||"image/avif".equals(mime);
+    }
+
+    private static byte[] readDefaultCharacterCdnBytes(InputStream input,int maxBytes)throws Exception{
+        java.io.ByteArrayOutputStream output=new java.io.ByteArrayOutputStream();
+        byte[] buffer=new byte[16384];
+        int total=0;
+        while(true){
+            int count=input.read(buffer);
+            if(count<0)break;
+            if(count==0){
+                int single=input.read();
+                if(single<0)break;
+                total++;
+                if(total>maxBytes)throw new java.io.IOException("CDN image exceeds the 12 MiB limit.");
+                output.write(single);
+                continue;
+            }
+            total+=count;
+            if(total>maxBytes)throw new java.io.IOException("CDN image exceeds the 12 MiB limit.");
+            output.write(buffer,0,count);
+        }
+        return output.toByteArray();
+    }
+
+    private static boolean hasDefaultCharacterCdnImageSignature(String mime,byte[] bytes){
+        if(bytes==null)return false;
+        if("image/png".equals(mime))
+            return bytes.length>=8&&(bytes[0]&255)==0x89&&bytes[1]=='P'&&bytes[2]=='N'&&bytes[3]=='G'
+                    &&bytes[4]==13&&bytes[5]==10&&bytes[6]==26&&bytes[7]==10;
+        if("image/jpeg".equals(mime))
+            return bytes.length>=3&&(bytes[0]&255)==0xff&&(bytes[1]&255)==0xd8&&(bytes[2]&255)==0xff;
+        if("image/webp".equals(mime))
+            return bytes.length>=12&&bytes[0]=='R'&&bytes[1]=='I'&&bytes[2]=='F'&&bytes[3]=='F'
+                    &&bytes[8]=='W'&&bytes[9]=='E'&&bytes[10]=='B'&&bytes[11]=='P';
+        if("image/gif".equals(mime))
+            return bytes.length>=6&&bytes[0]=='G'&&bytes[1]=='I'&&bytes[2]=='F'
+                    &&bytes[3]=='8'&&(bytes[4]=='7'||bytes[4]=='9')&&bytes[5]=='a';
+        if("image/avif".equals(mime)){
+            if(bytes.length<12||bytes[4]!='f'||bytes[5]!='t'||bytes[6]!='y'||bytes[7]!='p')return false;
+            String brand=new String(bytes,8,4,java.nio.charset.StandardCharsets.US_ASCII);
+            return "avif".equals(brand)||"avis".equals(brand);
+        }
+        return false;
+    }
+
+    private static boolean isDecodableDefaultCharacterCdnImage(String mime,byte[] bytes){
+        if(!hasDefaultCharacterCdnImageSignature(mime,bytes))return false;
+        android.graphics.BitmapFactory.Options options=new android.graphics.BitmapFactory.Options();
+        options.inJustDecodeBounds=true;
+        android.graphics.BitmapFactory.decodeByteArray(bytes,0,bytes.length,options);
+        return options.outWidth>0&&options.outHeight>0
+                &&options.outWidth<=8192&&options.outHeight<=8192
+                &&(long)options.outWidth*options.outHeight<=16L*1024L*1024L;
+    }
+
+    private void recordDefaultCharacterCdnEvent(String event,Uri uri,String reason,java.util.concurrent.atomic.AtomicInteger samples){
+        if(samples!=null&&samples.getAndIncrement()>=16)return;
+        JSONObject details=new JSONObject();
+        try{
+            details.put("path",uri==null?"":uri.getPath());
+            if(reason!=null&&!reason.isEmpty())details.put("reason",reason);
+        }catch(Exception ignored){}
+        DiagnosticsLogger.event(this,event.endsWith("loaded")?"INFO":"WARN","webview",event,details);
+    }
+
+    private WebResourceResponse defaultCharacterCdnNotFoundResponse(){
+        java.util.HashMap<String,String> headers=new java.util.HashMap<>();
+        headers.put("Cache-Control","no-store");
+        headers.put("X-Content-Type-Options","nosniff");
+        return new WebResourceResponse("text/plain","UTF-8",404,"Not Found",headers,new java.io.ByteArrayInputStream(new byte[0]));
+    }
+
+
     private boolean imageGenerationRoutingActive(){
         // The selected launcher mode is authoritative; stale service state must not
         // redirect ordinary image-pack/CDN requests into the generated-image cache.
@@ -1257,7 +1479,7 @@ public class MainActivity extends Activity {
             if (!image.getPath().startsWith(rootPrefix)) {
                 return generatedImageError(403, "Forbidden", requestPath, samples);
             }
-            if (!image.isFile()) return generatedImageError(404, "Not Found", requestPath);
+            if (!image.isFile()) return generatedImageError(404, "Not Found", requestPath, samples);
             long length = image.length();
             if (length <= 0 || length > 25L * 1024L * 1024L) {
                 return generatedImageError(413, "Content Too Large", requestPath, samples);
@@ -1268,7 +1490,7 @@ public class MainActivity extends Activity {
             headers.put("X-Content-Type-Options", "nosniff");
             return new WebResourceResponse(mime, null, 200, "OK", headers, new java.io.FileInputStream(image));
         } catch (java.io.FileNotFoundException error) {
-            return generatedImageError(404, "Not Found", requestPath);
+            return generatedImageError(404, "Not Found", requestPath, samples);
         } catch (Exception error) {
             return generatedImageError(500, "Read Error", requestPath, samples);
         }
