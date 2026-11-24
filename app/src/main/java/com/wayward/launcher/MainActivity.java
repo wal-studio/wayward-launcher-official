@@ -1692,13 +1692,21 @@ public class MainActivity extends Activity {
     private void installGoogleAuthBridgeScript(String gameOrigin){
         googleAuthBridgeCapability="";
         if(web==null||gameOrigin==null||gameOrigin.isEmpty())return;
+        try{
+            // The Blob-download bridge also has an onPageStarted fallback for
+            // older WebView versions, so its per-session capability must exist
+            // even when DOCUMENT_START_SCRIPT is unavailable.
+            googleAuthBridgeCapability=ImagePackFolderPickerScript.createCapability();
+        }catch(Throwable error){
+            DiagnosticsLogger.error(this,"oauth","native_bridge_capability_create_failed",error);
+            return;
+        }
         if(!WebViewFeature.isFeatureSupported(WebViewFeature.DOCUMENT_START_SCRIPT)){
             DiagnosticsLogger.event(this,"WARN","oauth","document_start_script_unavailable",null);
             return;
         }
         try(InputStream input=getAssets().open("wayward-google-auth-bridge.js");
             ByteArrayOutputStream output=new ByteArrayOutputStream()){
-            googleAuthBridgeCapability=ImagePackFolderPickerScript.createCapability();
             byte[] buffer=new byte[4096];int count;
             while((count=input.read(buffer))!=-1){
                 output.write(buffer,0,count);
@@ -1711,7 +1719,7 @@ public class MainActivity extends Activity {
             WebViewCompat.addDocumentStartJavaScript(web,script,Collections.singleton(gameOrigin));
             DiagnosticsLogger.event(this,"INFO","oauth","native_google_auth_bridge_installed",null);
         }catch(Throwable error){
-            googleAuthBridgeCapability="";
+            // Keep the capability for the independent Blob-download fallback.
             DiagnosticsLogger.error(this,"oauth","native_google_auth_bridge_install_failed",error);
         }
     }
