@@ -38,7 +38,6 @@ import com.google.android.gms.auth.api.identity.AuthorizationRequest;
 import com.google.android.gms.auth.api.identity.ClearTokenRequest;
 import com.google.android.gms.auth.api.identity.AuthorizationResult;
 import com.google.android.gms.auth.api.identity.Identity;
-import com.google.android.gms.auth.api.identity.RevokeAccessRequest;
 import com.google.android.gms.common.api.ApiException;
 import com.google.android.gms.common.api.Scope;
 import org.json.JSONArray;
@@ -2092,22 +2091,6 @@ public class MainActivity extends Activity {
         @JavascriptInterface public void cancelGoogleDriveAuth(String nonce,String capability){
             if(!hasGoogleAuthBridgeCapability(capability)||nonce==null||!nonce.matches("[a-f0-9]{48}"))return;
             runOnUiThread(()->clearGoogleDriveAuthRequest(nonce));
-        }
-        @JavascriptInterface public void revokeGoogleDriveAccess(String nonce,String capability){
-            if(!hasGoogleAuthBridgeCapability(capability)||nonce==null||!nonce.matches("[a-f0-9]{48}"))return;
-            runOnUiThread(()->{
-                try{
-                    RevokeAccessRequest request=RevokeAccessRequest.builder()
-                            .setScopes(Collections.singletonList(
-                                    new Scope("https://www.googleapis.com/auth/drive.appdata")))
-                            .build();
-                    Identity.getAuthorizationClient(MainActivity.this).revokeAccess(request)
-                            .addOnSuccessListener(unused->storeGoogleRevokeResult(nonce,true,null))
-                            .addOnFailureListener(error->storeGoogleRevokeResult(nonce,false,msg(error)));
-                }catch(Throwable error){
-                    storeGoogleRevokeResult(nonce,false,msg(error));
-                }
-            });
         }
         @JavascriptInterface public String takePendingStateForNonce(String nonce,String capability){
             if(!hasGoogleAuthBridgeCapability(capability)||nonce==null||!nonce.matches("[a-f0-9]{48}"))return "";
