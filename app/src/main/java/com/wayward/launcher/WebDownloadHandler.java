@@ -70,7 +70,11 @@ final class WebDownloadHandler {
     private static String safeMimeType(String value) {
         if (value == null) return "application/octet-stream";
         String mime = value.trim().toLowerCase(java.util.Locale.ROOT);
-        return mime.matches("[a-z0-9!#    synchronized boolean beginDownload(^_.+-]+/[a-z0-9!#    synchronized boolean beginDownload(^_.+-]+")
+        return mime.matches("[a-z0-9!#$&^_.+-]+/[a-z0-9!#$&^_.+-]+")
+                ? mime : "application/octet-stream";
+    }
+
+    synchronized boolean beginDownload(^_.+-]+/[a-z0-9!#    synchronized boolean beginDownload(^_.+-]+")
                 ? mime : "application/octet-stream";
     }
 
