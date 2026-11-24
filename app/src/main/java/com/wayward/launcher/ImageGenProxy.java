@@ -140,6 +140,11 @@ final class ImageGenProxy {
         }, "wayward-imagegen-proxy").start();
     }
 
+    static void reject(WebView web, String requestId, int status, String message) {
+        if (web == null || requestId == null || !requestId.matches("[A-Za-z0-9._-]{1,80}")) return;
+        deliver(web, requestId, errorResponse(status, message));
+    }
+
     private static String validatePath(String raw) {
         if (raw == null || raw.length() > 4096 || !raw.startsWith("/api/")
                 || raw.indexOf('\\') >= 0 || raw.indexOf('\0') >= 0) return null;

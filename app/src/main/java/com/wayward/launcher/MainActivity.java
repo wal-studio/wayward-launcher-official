@@ -2126,6 +2126,10 @@ public class MainActivity extends Activity {
                 webDownloadHandler.abortDownload(requestId);
         }
         @JavascriptInterface public void imageGenProxyFetch(String requestId,String method,String path,String headersJson,String bodyBase64){
+            if(!imageGenerationRoutingActive()){
+                ImageGenProxy.reject(web,requestId,403,"런처에서 이미지 생성 모드를 선택해야 합니다.");
+                return;
+            }
             ImageGenProxy.dispatch(web,requestId,method,path,headersJson,bodyBase64);
         }
         @JavascriptInterface public String imageGenRuntimeStatus(){
