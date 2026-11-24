@@ -1930,7 +1930,7 @@ public class MainActivity extends Activity {
         imagePackFolderPickerCapability="";imagePackFolderPickerScript=null;imagePackFolderPickerOrigin="";googleAuthBridgeCapability="";
     private void destroyWeb(){
         if(!pendingGoogleAuthNonce.isEmpty())clearGoogleDriveAuthRequest(pendingGoogleAuthNonce);
-        for(String nonce:ownedGoogleAuthResultNonces)clearGoogleDriveAuthRequest(nonce);
+        for(String nonce:new java.util.ArrayList<>(ownedGoogleAuthResultNonces))clearGoogleDriveAuthRequest(nonce);
         if(imagePackDirectoryAccess!=null){
             imagePackDirectoryAccess.cancelPending();
             imagePackDirectoryAccess.closeAllFileStreams();
