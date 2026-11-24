@@ -1044,8 +1044,9 @@ public final class MainActivity extends Activity {
     }
 
     private boolean imageGenerationRoutingActive(){
-        ImageGenStatusStore.State state=ImageGenStatusStore.read(getFilesDir());
-        return state.isReady()||state.isAvailable()||state.isStarting();
+        // The selected launcher mode is authoritative; stale service state must not
+        // redirect ordinary image-pack/CDN requests into the generated-image cache.
+        return IMAGE_MODE_GENERATION.equals(currentImageMode());
     }
 
     private WebResourceResponse serveImageRequestByMode(FolderHandler handler,String path,
