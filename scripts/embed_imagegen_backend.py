@@ -103,10 +103,12 @@ def extract(archive: Path, output: Path) -> None:
                 # assets pass the repository's whitespace-diff validation.
                 if relative == "wayward-imagegen/README.md":
                     readme = target.read_text(encoding="utf-8")
-                    normalized_readme = readme.rstrip("\\r\\n") + "\\n"
+                    normalized_readme = readme.rstrip("\r\n") + "\n"
                     if normalized_readme != readme:
                         target.write_text(normalized_readme, encoding="utf-8", newline="")
-                        written = target.stat().st_size
+                        normalized_size = target.stat().st_size
+                        total += normalized_size - written
+                        written = normalized_size
                         digest = hashlib.sha256(normalized_readme.encode("utf-8"))
                 files[relative] = digest.hexdigest()
                 if len(files) > MAX_FILES:
