@@ -2100,9 +2100,9 @@ public class MainActivity extends Activity {
         }
         @JavascriptInterface public void menu(){showHomePanel();}
         private boolean hasGoogleAuthBridgeCapability(String supplied){
-            return web!=null
-                    &&ImagePackFolderPickerScript.matchesCapability(googleAuthBridgeCapability,supplied)
-                    &&ImagePackFolderPickerScript.isSameOrigin(web.getUrl(),sessionOrigin(activeProfileId));
+            // The capability is injected only into the session's exact origin and is unique per WebView.
+            // Avoid calling WebView.getUrl() from JavascriptInterface's background thread.
+            return ImagePackFolderPickerScript.matchesCapability(googleAuthBridgeCapability,supplied);
         }
         @JavascriptInterface public void startGoogleDriveAuth(String nonce,String capability){
             if(!hasGoogleAuthBridgeCapability(capability)||nonce==null||!nonce.matches("[a-f0-9]{48}"))return;
