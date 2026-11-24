@@ -117,14 +117,20 @@ final class ImageGenBackendInstaller {
             try {
                 details.put("stage", stage);
                 details.put("exceptionClass", error.getClass().getName());
-                details.put("exceptionMessage", ImagePackDiagnostics.safeText(
-                        error.getMessage() == null ? "" : error.getMessage()));
+                details.put("exceptionMessage", safeExceptionMessage(error));
             } catch (Exception ignored) {}
             DiagnosticsLogger.error(context, "imagegen_backend_installer",
                     "imagegen_backend_install_failed", error, details);
             if (error instanceof Exception) throw (Exception) error;
             throw (Error) error;
         }
+    }
+
+    private static String safeExceptionMessage(Throwable error) {
+        String value = error == null || error.getMessage() == null ? "" : error.getMessage();
+        value = value.replaceAll("(?i)content://[^\\s]+", "[content-uri]");
+        value = value.replaceAll("(?i)(?:[a-z]:\\\\|/)[^\\s]+", "[path]");
+        return value.length() > 500 ? value.substring(0, 500) : value;
     }
 
     private static JSONObject diagnosticDetails(Context context, File destination) {
