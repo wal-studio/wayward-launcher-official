@@ -1182,10 +1182,20 @@ public class MainActivity extends Activity {
 
     private WebResourceResponse serveImageRequestByMode(FolderHandler handler,String path,
             java.util.concurrent.atomic.AtomicInteger samples){
+        final String generatedPrefix="/images/__wayward_generated__/";
+        if(path==null||!path.startsWith("/images/"))return null;
+        boolean alreadyGenerated=path.startsWith(generatedPrefix);
+        String originalPath=alreadyGenerated
+                ? "/images/"+path.substring(generatedPrefix.length()) : path;
         if(imageGenerationRoutingActive()){
-            return serveGeneratedImageRequest("/images/__wayward_generated__/"+path.substring(8),samples);
+            String generatedPath=alreadyGenerated?path:generatedPrefix+path.substring(8);
+            WebResourceResponse generated=serveGeneratedImageRequest(generatedPath,samples);
+            if(generated!=null){
+                int status=generated.getStatusCode();
+                if(status==200||status==400||status==403)return generated;
+            }
         }
-        return serveImageRequest(handler,path,samples);
+        return serveImageRequest(handler,originalPath,samples);
     }
 
     private WebResourceResponse serveImageRequest(FolderHandler handler,String path,
@@ -1224,29 +1234,29 @@ public class MainActivity extends Activity {
             String requestPath, java.util.concurrent.atomic.AtomicInteger samples) {
         final String prefix = "/images/__wayward_generated__/";
         if (requestPath == null || !requestPath.startsWith(prefix)) {
-            return generatedImageError(404, "Not Found", requestPath);
+            return generatedImageError(404, "Not Found", requestPath, samples);
         }
         try {
             String relative = FolderHandler.normal(requestPath.substring(prefix.length()));
-            if (relative == null) return generatedImageError(400, "Bad Request", requestPath);
+            if (relative == null) return generatedImageError(400, "Bad Request", requestPath, samples);
 
             String mime = FolderHandler.mime(relative);
             if (!("image/png".equals(mime) || "image/jpeg".equals(mime)
                     || "image/webp".equals(mime) || "image/gif".equals(mime)
                     || "image/avif".equals(mime))) {
-                return generatedImageError(415, "Unsupported Media Type", requestPath);
+                return generatedImageError(415, "Unsupported Media Type", requestPath, samples);
             }
 
             File root = new File(getFilesDir(), "imagegen/images").getCanonicalFile();
             File image = new File(root, relative).getCanonicalFile();
             String rootPrefix = root.getPath() + File.separator;
             if (!image.getPath().startsWith(rootPrefix)) {
-                return generatedImageError(403, "Forbidden", requestPath);
+                return generatedImageError(403, "Forbidden", requestPath, samples);
             }
             if (!image.isFile()) return generatedImageError(404, "Not Found", requestPath);
             long length = image.length();
             if (length <= 0 || length > 25L * 1024L * 1024L) {
-                return generatedImageError(413, "Content Too Large", requestPath);
+                return generatedImageError(413, "Content Too Large", requestPath, samples);
             }
 
             java.util.HashMap<String, String> headers = new java.util.HashMap<>();
@@ -1256,18 +1266,21 @@ public class MainActivity extends Activity {
         } catch (java.io.FileNotFoundException error) {
             return generatedImageError(404, "Not Found", requestPath);
         } catch (Exception error) {
-            return generatedImageError(500, "Read Error", requestPath);
+            return generatedImageError(500, "Read Error", requestPath, samples);
         }
     }
 
-    private WebResourceResponse generatedImageError(int status, String reason, String requestPath) {
-        try {
-            JSONObject diagnostic = new JSONObject();
-            diagnostic.put("srcKind", "generated_image");
-            diagnostic.put("responseStatus", status);
-            ImagePipelineDiagnostics.addSanitizedPath(diagnostic, requestPath);
-            ImagePipelineDiagnostics.record(this, "webview_generated_image_resource_error", diagnostic);
-        } catch (Exception ignored) {}
+    private WebResourceResponse generatedImageError(int status, String reason, String requestPath,
+            java.util.concurrent.atomic.AtomicInteger samples) {
+        if(status!=404&&status!=415&&(samples==null||samples.getAndIncrement()<16)){
+            try {
+                JSONObject diagnostic = new JSONObject();
+                diagnostic.put("srcKind", "generated_image");
+                diagnostic.put("responseStatus", status);
+                ImagePipelineDiagnostics.addSanitizedPath(diagnostic, requestPath);
+                ImagePipelineDiagnostics.record(this, "webview_generated_image_resource_error", diagnostic);
+            } catch (Exception ignored) {}
+        }
         byte[] body = "Generated image unavailable".getBytes(StandardCharsets.UTF_8);
         java.util.HashMap<String, String> headers = new java.util.HashMap<>();
         headers.put("Cache-Control", "no-store");
