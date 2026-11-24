@@ -125,10 +125,14 @@ assert.match(main, /private synchronized int reserveGoogleAuthRequestCode\(Strin
   'Google auth request codes must be allocated per request');
 assert.match(main, /int requestCode=nextGoogleAuthRequestCode\+\+/,
   'Google auth request codes must never be reused during the Activity lifetime');
-const chooserRequestMatch = webFileChooser.match(/static final int REQUEST_CODE\s*=\s*(\d+)/);
-assert(chooserRequestMatch, 'WebView file chooser request code must exist');
-const allRequestCodes = [...mainRequestCodes, Number(chooserRequestMatch[1])];
-assert.equal(new Set(allRequestCodes).size, allRequestCodes.length,
-  'MainActivity and WebView file chooser ActivityResult request codes must be unique');
-
+const chooserRange = webFileChooser.match(/REQUEST_CODE_MIN\s*=\s*(\d+);[\s\S]*?REQUEST_CODE_MAX\s*=\s*(\d+)/);
+assert(chooserRange, 'WebView file chooser request-code range must exist');
+const chooserMin = Number(chooserRange[1]);
+const chooserMax = Number(chooserRange[2]);
+assert(chooserMin > Math.max(...mainRequestCodes) && chooserMax < 60000,
+  'WebView file chooser range must not overlap MainActivity or Google auth request codes');
+assert.match(webFileChooser, /NEXT_REQUEST_CODE\s*=\s*new AtomicInteger\(REQUEST_CODE_MIN\)/,
+  'WebView file chooser must allocate request codes from its isolated range');
+assert.match(webFileChooser, /current >= REQUEST_CODE_MAX \? REQUEST_CODE_MIN : current \+ 1/,
+  'WebView file chooser request-code allocation must wrap only within its own range');
 console.log('Official v1 scope checks passed');
