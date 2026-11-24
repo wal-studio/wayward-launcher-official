@@ -1371,6 +1371,20 @@ public class MainActivity extends Activity {
             finishImageGenCallbacks();
             return;
         }
+        try {
+            String token = NovelAiTokenStore.readToken(this);
+            if (token == null || token.trim().isEmpty()) {
+                imageGenSessionMessage = "런처에 NovelAI 토큰을 먼저 등록해야 합니다.";
+                refreshImageGenStatus();
+                finishImageGenCallbacks();
+                return;
+            }
+        } catch (Exception error) {
+            imageGenSessionMessage = "런처 NovelAI 보안 저장소를 읽지 못했습니다: " + msg(error);
+            refreshImageGenStatus();
+            finishImageGenCallbacks();
+            return;
+        }
         if (sessionTree == null) {
             imageGenSessionMessage = "현재 게임 세션의 폴더를 확인할 수 없어 이미지 서버 자동 시작을 건너뛰었습니다.";
             finishImageGenCallbacks();
