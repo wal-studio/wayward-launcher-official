@@ -1906,7 +1906,28 @@ public class MainActivity extends Activity {
     private void showHomePanel(){runOnUiThread(()->{if(web!=null)web.setVisibility(View.GONE);if(home!=null)home.setVisibility(View.VISIBLE);refreshStatus();refreshImageGenStatus();renderImageModePanel();});}
         if(imagePackDirectoryAccess!=null){imagePackDirectoryAccess.cancelPending();imagePackDirectoryAccess.closeAllFileStreams();imagePackDirectoryAccess=null;}
         imagePackFolderPickerCapability="";imagePackFolderPickerScript=null;imagePackFolderPickerOrigin="";googleAuthBridgeCapability="";
-    private void destroyWeb(){if(webDownloadHandler!=null){webDownloadHandler.cancelPending();webDownloadHandler=null;}webDownloadBridgeScript=null;if(webFileChooser!=null){webFileChooser.cancelPending();webFileChooser=null;}if(web==null)return;web.removeJavascriptInterface("WMLHost");root.removeView(web);web.stopLoading();web.loadUrl("about:blank");web.destroy();web=null;}
+    private void destroyWeb(){
+        if(imagePackDirectoryAccess!=null){
+            imagePackDirectoryAccess.cancelPending();
+            imagePackDirectoryAccess.closeAllFileStreams();
+            imagePackDirectoryAccess=null;
+        }
+        if(webDownloadHandler!=null){webDownloadHandler.cancelPending();webDownloadHandler=null;}
+        if(webFileChooser!=null){webFileChooser.cancelPending();webFileChooser=null;}
+        imagePackFolderPickerCapability="";
+        imagePackFolderPickerScript=null;
+        imagePackFolderPickerOrigin="";
+        googleAuthBridgeCapability="";
+        webDownloadBridgeScript=null;
+        imagePackDiagnosticSessionId="";
+        if(web==null)return;
+        web.removeJavascriptInterface("WMLHost");
+        root.removeView(web);
+        web.stopLoading();
+        web.loadUrl("about:blank");
+        web.destroy();
+        web=null;
+    }
     @Override public void onBackPressed(){
         if(web!=null&&web.getVisibility()==View.VISIBLE){
             if(web.canGoBack())web.goBack();
