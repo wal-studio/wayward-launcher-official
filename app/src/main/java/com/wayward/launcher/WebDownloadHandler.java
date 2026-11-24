@@ -74,10 +74,6 @@ final class WebDownloadHandler {
                 ? mime : "application/octet-stream";
     }
 
-    synchronized boolean beginDownload(^_.+-]+/[a-z0-9!#    synchronized boolean beginDownload(^_.+-]+")
-                ? mime : "application/octet-stream";
-    }
-
     synchronized boolean beginDownload(String requestId, String filename, String mimeType, long expectedBytes) {
         if (pending != null) return false;
         if (requestId == null || !requestId.matches("[A-Za-z0-9._:-]{1,128}")) return false;
