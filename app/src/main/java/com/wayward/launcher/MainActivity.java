@@ -2148,8 +2148,6 @@ public class MainActivity extends Activity {
     }
 
     private void showHomePanel(){runOnUiThread(()->{if(web!=null)web.setVisibility(View.GONE);if(home!=null)home.setVisibility(View.VISIBLE);refreshStatus();refreshImageGenStatus();renderImageModePanel();});}
-        if(imagePackDirectoryAccess!=null){imagePackDirectoryAccess.cancelPending();imagePackDirectoryAccess.closeAllFileStreams();imagePackDirectoryAccess=null;}
-        imagePackFolderPickerCapability="";imagePackFolderPickerScript=null;imagePackFolderPickerOrigin="";googleAuthBridgeCapability="";
     private void destroyWeb(){
         if(!pendingGoogleAuthNonce.isEmpty())clearGoogleDriveAuthRequest(pendingGoogleAuthNonce);
         for(String nonce:new java.util.ArrayList<>(ownedGoogleAuthResultNonces))clearGoogleDriveAuthRequest(nonce);
