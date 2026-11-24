@@ -1305,6 +1305,11 @@ public class MainActivity extends Activity {
                         if (out.size() > 64 * 1024) throw new IllegalStateException(assetName + " 파일이 너무 큽니다.");
                     }
                     String source = new String(out.toByteArray(), StandardCharsets.UTF_8);
+                    if ("imagegen-proxy.js".equals(assetName)) {
+                        String placeholder = "__WAYWARD_IMAGEGEN_CAPABILITY__";
+                        if (!source.contains(placeholder)) throw new IllegalStateException("ImageGen proxy capability placeholder is missing.");
+                        source = source.replace(placeholder, googleAuthBridgeCapability);
+                    }
                     WebViewCompat.addDocumentStartJavaScript(
                             web, source, Collections.singleton(origin));
                 }
@@ -2138,7 +2143,12 @@ public class MainActivity extends Activity {
             if(hasGoogleAuthBridgeCapability(capability)&&webDownloadHandler!=null)
                 webDownloadHandler.abortDownload(requestId);
         }
-        @JavascriptInterface public void imageGenProxyFetch(String requestId,String method,String path,String headersJson,String bodyBase64){
+        @JavascriptInterface public void imageGenProxyFetch(String requestId,String method,String path,String headersJson,String bodyBase64,String capability){
+            if(!hasGoogleAuthBridgeCapability(capability))return;
+            if(path!=null&&path.startsWith("/api/nai-compat/")){
+                NovelAiRequestProxy.dispatch(web,requestId,method,path,headersJson,bodyBase64,imageGenerationRoutingActive());
+                return;
+            }
             if(!imageGenerationRoutingActive()){
                 ImageGenProxy.reject(web,requestId,403,"런처에서 이미지 생성 모드를 선택해야 합니다.");
                 return;

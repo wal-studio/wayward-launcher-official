@@ -4,6 +4,7 @@
   if (!window.WMLHost || typeof window.WMLHost.imageGenProxyFetch !== "function") return;
   window.__waywardImageGenProxyInstalled = true;
 
+  const nativeCapability = "__WAYWARD_IMAGEGEN_CAPABILITY__";
   const nativeFetch = window.fetch.bind(window);
   const pending = new Map();
 
@@ -101,7 +102,8 @@
           request.method,
           url.pathname + url.search,
           JSON.stringify(headers),
-          bytesToBase64(bodyBuffer)
+          bytesToBase64(bodyBuffer),
+          nativeCapability
         );
         report("launcher_imagegen_request_dispatched", diagnostic);
       } catch (error) {
