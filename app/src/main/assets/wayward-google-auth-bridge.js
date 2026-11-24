@@ -4,7 +4,55 @@
   if (window.__waywardGoogleAuthBridgeInstalled) return;
   window.__waywardGoogleAuthBridgeInstalled = true;
 
-  const AUTH_ORIGIN = 'https://wayward-cloud-auth.vercel.app';
+  const LEGACY_AUTH_ORIGIN = 'https://wayward-cloud-auth.vercel.app';
+  const AUTH_ORIGINS = new Set([
+    LEGACY_AUTH_ORIGIN,
+    'https://jeiky224.github.io'
+  ]);
+  const AUTH_PATHS = new Set([
+    '/cloud/file-auth.html',
+    '/cloud/auth-061.html',
+    '/cloud/auth.html'
+  ]);
+  const nativeCapability = "__WAYWARD_GOOGLE_AUTH_CAPABILITY__";
+  const DRIVE_SESSION_TOKEN_KEY = 'wml-google-drive-session-token-v1';
+  let lastGoogleDriveAccessToken = '';
+
+  function storedGoogleDriveAccessToken() {
+    try {
+      const raw = window.localStorage && window.localStorage.getItem(DRIVE_SESSION_TOKEN_KEY);
+      if (!raw) return '';
+      const session = JSON.parse(raw);
+      return session && typeof session.accessToken === 'string' ? session.accessToken : '';
+    } catch (_) {
+      return '';
+    }
+  }
+
+  function clearGoogleTokenOnExplicitLogout(event) {
+    try {
+      const target = event && event.target;
+      const button = target && typeof target.closest === 'function'
+        ? target.closest('button,[role="button"]') : null;
+      if (!button) return;
+
+      const label = String(button.textContent || button.innerText || '')
+        .replace(/\\s+/g, ' ').trim();
+      if (label !== '로그아웃') return;
+      if (typeof button.closest !== 'function' || !button.closest('.wml-gd-wrap')) return;
+
+      const token = lastGoogleDriveAccessToken || storedGoogleDriveAccessToken();
+      const host = window.WMLHost;
+      if (!token || !host || typeof host.clearGoogleAccessToken !== 'function') return;
+
+      host.clearGoogleAccessToken(token, nativeCapability);
+      lastGoogleDriveAccessToken = '';
+    } catch (_) {}
+  }
+
+  if (document && typeof document.addEventListener === 'function') {
+    document.addEventListener('click', clearGoogleTokenOnExplicitLogout, true);
+  }
   const originalOpen = typeof window.open === 'function' ? window.open.bind(window) : null;
 
   const originalFetch = typeof window.fetch === 'function' ? window.fetch.bind(window) : null;
@@ -22,7 +70,7 @@
           );
           const authorization = requestHeaders.get('Authorization') || '';
           const match = /^Bearer\s+(.+)$/i.exec(authorization);
-          if (match) window.WMLHost.clearGoogleAccessToken(match[1]);
+          if (match) window.WMLHost.clearGoogleAccessToken(match[1], nativeCapability);
         }
       } catch (_) {}
       return response;
@@ -38,9 +86,14 @@
     }
 
     const host = window.WMLHost;
-    if (parsed.origin !== AUTH_ORIGIN ||
+    const hasPolicyStart = !!(host &&
+      typeof host.startGoogleDriveAuthWithPolicy === 'function');
+    const hasLegacyStart = !!(host &&
+      typeof host.startGoogleDriveAuth === 'function');
+    if (!AUTH_ORIGINS.has(parsed.origin) ||
+        (parsed.origin !== LEGACY_AUTH_ORIGIN && !AUTH_PATHS.has(parsed.pathname)) ||
         !host ||
-        typeof host.startGoogleDriveAuth !== 'function' ||
+        (!hasPolicyStart && !hasLegacyStart) ||
         typeof host.takePendingStateForNonce !== 'function') {
       return originalOpen ? originalOpen(url, target, features) : null;
     }
@@ -49,6 +102,14 @@
     if (!/^[a-f0-9]{48}$/.test(nonce)) {
       return originalOpen ? originalOpen(url, target, features) : null;
     }
+
+    // The CloudSave page communicates explicit account selection through
+    // login=select_account. Missing login keeps the legacy remembered-account
+    // behavior for older callers.
+    const accountPolicy = parsed.searchParams.get('login') || 'remember';
+    const policyIsValid = accountPolicy === 'remember' ||
+      accountPolicy === 'select_account';
+    const forceSelectAccount = accountPolicy === 'select_account';
 
     const parent = document.documentElement || document.body;
     if (!parent) return originalOpen ? originalOpen(url, target, features) : null;
@@ -76,6 +137,11 @@
     };
 
     const deliver = data => {
+      if (data && data.nonce === nonce &&
+          data.type === 'wayward-cloud-auth-success' &&
+          typeof data.accessToken === 'string' && data.accessToken) {
+        lastGoogleDriveAccessToken = data.accessToken;
+      }
       try {
         window.dispatchEvent(new MessageEvent('message', {
           data,
@@ -90,7 +156,7 @@
       if (finished) return;
       ticks += 1;
       let raw = '';
-      try { raw = host.takePendingStateForNonce(nonce) || ''; } catch (_) {}
+      try { raw = host.takePendingStateForNonce(nonce, nativeCapability) || ''; } catch (_) {}
 
       if (raw) {
         let data;
@@ -111,6 +177,7 @@
         }
         deliver(data);
       } else if (ticks >= 720) {
+        try { if (typeof host.cancelGoogleDriveAuth === 'function') host.cancelGoogleDriveAuth(nonce, nativeCapability); } catch (_) {}
         deliver({
           type: 'wayward-cloud-auth-error',
           nonce,
@@ -119,14 +186,34 @@
       }
     }, 250);
 
-    try {
-      host.startGoogleDriveAuth(nonce);
-    } catch (error) {
-      deliver({
+    const deliverStartError = message => {
+      // window.open's caller assigns the returned WindowProxy before it
+      // handles postMessage. Defer errors one task so event.source matches.
+      window.setTimeout(() => deliver({
         type: 'wayward-cloud-auth-error',
         nonce,
-        message: String(error && error.message || error)
-      });
+        message
+      }), 0);
+    };
+
+    if (!policyIsValid) {
+      deliverStartError('Google 계정 선택 정책 값이 올바르지 않습니다.');
+      return source;
+    }
+
+    try {
+      if (hasPolicyStart) {
+        // New launchers receive both the normal and forced account policies.
+        host.startGoogleDriveAuthWithPolicy(nonce, forceSelectAccount, nativeCapability);
+      } else if (!forceSelectAccount && hasLegacyStart) {
+        // Older launchers remain compatible for ordinary remembered-account auth.
+        host.startGoogleDriveAuth(nonce, nativeCapability);
+      } else {
+        // Never silently ignore a requested account picker on an old launcher.
+        deliverStartError('현재 Android 런처는 Google 계정 선택 API를 제공하지 않습니다. 런처를 업데이트한 뒤 다시 시도하세요.');
+      }
+    } catch (error) {
+      deliverStartError(String(error && error.message || error));
     }
 
     return source;
