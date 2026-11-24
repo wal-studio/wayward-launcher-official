@@ -29,44 +29,143 @@ final class ImageGenBackendInstaller {
     private ImageGenBackendInstaller() {}
 
     static File install(Context context, File destination) throws Exception {
-        if (context == null || destination == null) throw new IllegalArgumentException("ImageGen 설치 경로가 없습니다.");
-        File parent = destination.getAbsoluteFile().getParentFile();
-        if (parent == null) throw new IllegalStateException("ImageGen 저장 경로가 올바르지 않습니다.");
-        if (!parent.isDirectory() && !parent.mkdirs() && !parent.isDirectory()) {
-            throw new IllegalStateException("ImageGen 앱 내부 저장 폴더를 만들지 못했습니다.");
-        }
-
-        if (isValidInstalled(destination)) return destination;
-
-        File staging = new File(parent, destination.getName() + ".installing");
-        File backup = new File(parent, destination.getName() + ".previous");
-        deleteTree(staging);
-        if (!staging.mkdirs()) throw new IllegalStateException("ImageGen 임시 설치 폴더를 만들지 못했습니다.");
-
+        String stage = "validate_arguments";
         try {
-            copyAssetTree(context.getAssets(), ASSET_ROOT, staging,
-                    staging.getCanonicalFile(), new long[] {0}, new int[] {0});
-            validateBundle(staging);
-            deleteTree(backup);
-            if (destination.exists() && !destination.renameTo(backup)) {
-                throw new IllegalStateException("기존 ImageGen 백엔드를 안전하게 교체하지 못했습니다.");
-            }
-            if (!staging.renameTo(destination)) {
-                if (backup.exists()) backup.renameTo(destination);
-                throw new IllegalStateException("내장 ImageGen 백엔드를 설치 폴더로 이동하지 못했습니다.");
-            }
-            deleteTree(backup);
-        } catch (Exception error) {
-            deleteTree(staging);
-            if (!destination.exists() && backup.exists()) backup.renameTo(destination);
-            throw error;
-        }
+            if (context == null || destination == null) throw new IllegalArgumentException("ImageGen 설치 경로가 없습니다.");
+            File parent = destination.getAbsoluteFile().getParentFile();
+            if (parent == null) throw new IllegalStateException("ImageGen 저장 경로가 올바르지 않습니다.");
+            File staging = new File(parent, destination.getName() + ".installing");
+            File backup = new File(parent, destination.getName() + ".previous");
 
-        if (!isValidInstalled(destination)) {
-            deleteTree(destination);
-            throw new SecurityException("설치한 ImageGen 백엔드 검증에 실패했습니다.");
+            stage = "recover_previous_install";
+            if (!destination.exists() && isValidInstalled(backup)) {
+                if (!backup.renameTo(destination)) throw new IllegalStateException("이전 정상 ImageGen 설치본을 복구하지 못했습니다.");
+            }
+            if (isValidInstalled(destination)) {
+                deleteTree(staging);
+                deleteTree(backup);
+                return destination;
+            }
+            if (isValidInstalled(backup)) {
+                deleteTree(destination);
+                if (!backup.renameTo(destination) || !isValidInstalled(destination)) {
+                    throw new IllegalStateException("이전 정상 ImageGen 설치본을 복구하지 못했습니다.");
+                }
+                deleteTree(staging);
+                return destination;
+            }
+
+            stage = "inspect_apk_assets";
+            JSONObject details = diagnosticDetails(context, destination);
+            DiagnosticsLogger.event(context, "INFO", "imagegen_backend_installer", "imagegen_backend_install_started", details);
+            String[] rootEntries = context.getAssets().list(ASSET_ROOT);
+            if (rootEntries == null || rootEntries.length == 0
+                    || !assetExists(context, ASSET_ROOT + "/launcher-bundle.json")
+                    || !assetExists(context, ASSET_ROOT + "/wayward-imagegen/package.json")) {
+                throw new IllegalStateException("APK 내부 ImageGen 백엔드 자산이 없거나 불완전합니다.");
+            }
+
+            stage = "prepare_install_parent";
+            if (!parent.isDirectory() && !parent.mkdirs() && !parent.isDirectory()) {
+                throw new IllegalStateException("ImageGen 앱 내부 저장 폴더를 만들지 못했습니다.");
+            }
+            if (!parent.canWrite()) throw new IllegalStateException("ImageGen 설치 상위 폴더에 쓰기 권한이 없습니다.");
+
+            stage = "prepare_staging_directory";
+            deleteTree(staging);
+            if (!staging.mkdirs()) throw new IllegalStateException("ImageGen 임시 설치 폴더를 만들지 못했습니다.");
+
+            try {
+                stage = "copy_apk_assets";
+                copyAssetTree(context.getAssets(), ASSET_ROOT, staging,
+                        staging.getCanonicalFile(), new long[] {0}, new int[] {0});
+                stage = "validate_staged_bundle";
+                validateBundle(staging);
+
+                stage = "preserve_existing_backend";
+                deleteTree(backup);
+                if (destination.exists() && !destination.renameTo(backup)) {
+                    throw new IllegalStateException("기존 ImageGen 백엔드를 안전하게 교체하지 못했습니다.");
+                }
+
+                stage = "activate_staged_backend";
+                if (!staging.renameTo(destination)) {
+                    if (backup.exists()) backup.renameTo(destination);
+                    throw new IllegalStateException("내장 ImageGen 백엔드를 설치 폴더로 이동하지 못했습니다.");
+                }
+
+                stage = "validate_installed_backend";
+                if (!isValidInstalled(destination)) {
+                    deleteTree(destination);
+                    if (backup.exists() && !backup.renameTo(destination)) {
+                        throw new SecurityException("새 ImageGen 검증 실패 후 이전 설치본 복구에도 실패했습니다.");
+                    }
+                    throw new SecurityException("설치한 ImageGen 백엔드 검증에 실패했습니다.");
+                }
+                deleteTree(backup);
+            } catch (Exception error) {
+                deleteTree(staging);
+                if (!destination.exists() && backup.exists()) backup.renameTo(destination);
+                throw error;
+            }
+
+            DiagnosticsLogger.event(context, "INFO", "imagegen_backend_installer",
+                    "imagegen_backend_install_succeeded", diagnosticDetails(context, destination));
+            return destination;
+        } catch (Throwable error) {
+            JSONObject details = diagnosticDetails(context, destination);
+            try {
+                details.put("stage", stage);
+                details.put("exceptionClass", error.getClass().getName());
+                details.put("exceptionMessage", ImagePackDiagnostics.safeText(
+                        error.getMessage() == null ? "" : error.getMessage()));
+            } catch (Exception ignored) {}
+            DiagnosticsLogger.error(context, "imagegen_backend_installer",
+                    "imagegen_backend_install_failed", error, details);
+            if (error instanceof Exception) throw (Exception) error;
+            throw (Error) error;
         }
-        return destination;
+    }
+
+    private static JSONObject diagnosticDetails(Context context, File destination) {
+        JSONObject details = new JSONObject();
+        try {
+            File files = context == null ? null : context.getFilesDir();
+            File target = destination == null ? null : destination.getAbsoluteFile();
+            File parent = target == null ? null : target.getParentFile();
+            String filesPath = files == null ? "" : files.getAbsolutePath();
+            String targetPath = target == null ? "" : target.getAbsolutePath();
+            boolean insideAppFiles = !filesPath.isEmpty()
+                    && targetPath.startsWith(filesPath + File.separator);
+            String relative = insideAppFiles
+                    ? targetPath.substring(filesPath.length() + 1).replace(File.separatorChar, '/')
+                    : "";
+            String[] entries = context == null ? null : context.getAssets().list(ASSET_ROOT);
+            boolean rootPresent = entries != null && entries.length > 0;
+            details.put("backendVersion", VERSION);
+            details.put("apkBackendAssetRootPresent", rootPresent);
+            details.put("apkBackendAssetEntryCount", entries == null ? 0 : entries.length);
+            details.put("apkBackendManifestPresent", context != null && assetExists(context, ASSET_ROOT + "/launcher-bundle.json"));
+            details.put("apkBackendPackagePresent", context != null && assetExists(context, ASSET_ROOT + "/wayward-imagegen/package.json"));
+            details.put("installTargetInsideAppFilesDir", insideAppFiles);
+            details.put("installTargetRelativePath", relative);
+            details.put("installTargetExists", target != null && target.isDirectory());
+            details.put("installTargetWritable", target != null && target.exists()
+                    ? target.canWrite() : parent != null && parent.canWrite());
+            details.put("installParentExists", parent != null && parent.isDirectory());
+            details.put("installParentWritable", parent != null && parent.canWrite());
+            details.put("installTargetValid", target != null && isValidInstalled(target));
+        } catch (Throwable ignored) {}
+        return details;
+    }
+
+    private static boolean assetExists(Context context, String path) {
+        if (context == null || path == null || path.isEmpty()) return false;
+        try (InputStream ignored = context.getAssets().open(path)) {
+            return true;
+        } catch (Exception ignored) {
+            return false;
+        }
     }
 
     static boolean isValidInstalled(File root) {
