@@ -122,6 +122,8 @@ public class MainActivity extends Activity {
     private String imagePackFolderPickerCapability = "";
     private String googleAuthBridgeCapability = "";
     private WebFileChooser webFileChooser;
+    private WebDownloadHandler webDownloadHandler;
+    private String webDownloadBridgeScript;
 
     @Override public void onCreate(Bundle b){
         super.onCreate(b);
@@ -564,6 +566,10 @@ public class MainActivity extends Activity {
             }
             return;
         }
+        if(WebDownloadHandler.isRequestCode(req)){
+            if(webDownloadHandler!=null)webDownloadHandler.handleActivityResult(req,result,data);
+            return;
+        }
         if(WebFileChooser.isRequestCode(req)){
             if(webFileChooser!=null)webFileChooser.handleActivityResult(req,result,data);
             return;
@@ -853,6 +859,7 @@ public class MainActivity extends Activity {
         installGoogleAuthBridgeScript(origin);
         installImageGenDocumentStartScript(origin);
         installImagePackFolderPickerScript(origin);
+        installWebDownloadBridgeScript(origin);
         FolderHandler folderHandler=new FolderHandler(tree,getAssets(),zipMods,origin);
         WebViewAssetLoader loader=new WebViewAssetLoader.Builder().setDomain(domain+":"+originPort).addPathHandler("/game/",folderHandler).build();
         final java.util.concurrent.atomic.AtomicInteger imageDiagnostics=new java.util.concurrent.atomic.AtomicInteger();
@@ -870,6 +877,13 @@ public class MainActivity extends Activity {
                             view,url,imagePackFolderPickerOrigin,imagePackFolderPickerScript,installed->
                                     DiagnosticsLogger.event(MainActivity.this,installed?"INFO":"ERROR","image-pack",
                                             installed?"folder_picker_runtime_install_verified":"folder_picker_runtime_install_failed",null));
+                }
+                if(webDownloadBridgeScript!=null
+                        &&ImagePackFolderPickerScript.isSameOrigin(url,sessionOrigin(activeProfileId))){
+                    ImagePackFolderPickerScript.installAfterPageFinished(
+                            view,url,sessionOrigin(activeProfileId),webDownloadBridgeScript,installed->
+                                    DiagnosticsLogger.event(MainActivity.this,installed?"INFO":"ERROR","webview",
+                                            installed?"blob_download_runtime_install_verified":"blob_download_runtime_install_failed",null));
                 }
                 super.onPageFinished(view,url);
             }
@@ -981,7 +995,7 @@ public class MainActivity extends Activity {
                 String p=u.getScheme();if("https".equalsIgnoreCase(p)||"http".equalsIgnoreCase(p)||"mailto".equalsIgnoreCase(p)){try{startActivity(new Intent(Intent.ACTION_VIEW,u));return true;}catch(Exception ignored){return false;}}return true;
             }
         });
-        webFileChooser=new WebFileChooser(this,imagePackDiagnosticSessionId);web.setWebChromeClient(webFileChooser);root.addView(web,new FrameLayout.LayoutParams(-1,-1));web.setVisibility(View.GONE);
+        webFileChooser=new WebFileChooser(this,imagePackDiagnosticSessionId);webDownloadHandler=new WebDownloadHandler(this,web);web.setWebChromeClient(webFileChooser);root.addView(web,new FrameLayout.LayoutParams(-1,-1));web.setVisibility(View.GONE);
     }
 
 
@@ -1004,6 +1018,31 @@ public class MainActivity extends Activity {
             imagePackFolderPickerScript = null;
             imagePackFolderPickerCapability = "";
             DiagnosticsLogger.error(this, "image-pack", "folder_picker_script_install", error);
+        }
+    }
+
+    private void installWebDownloadBridgeScript(String origin) {
+        webDownloadBridgeScript = null;
+        if (web == null || origin == null || origin.isEmpty()
+                || !WebViewFeature.isFeatureSupported(WebViewFeature.DOCUMENT_START_SCRIPT)) return;
+        try (InputStream input = getAssets().open("wayward-download-bridge.js");
+             ByteArrayOutputStream output = new ByteArrayOutputStream()) {
+            byte[] buffer = new byte[4096];
+            int count;
+            while ((count = input.read(buffer)) != -1) {
+                output.write(buffer, 0, count);
+                if (output.size() > 64 * 1024) throw new IllegalStateException("Download bridge script is too large.");
+            }
+            String script = new String(output.toByteArray(), StandardCharsets.UTF_8);
+            String placeholder = "__WAYWARD_DOWNLOAD_CAPABILITY__";
+            if (!script.contains(placeholder)) throw new IllegalStateException("Download bridge capability placeholder is missing.");
+            script = script.replace(placeholder, googleAuthBridgeCapability);
+            webDownloadBridgeScript = script;
+            WebViewCompat.addDocumentStartJavaScript(web, script, Collections.singleton(origin));
+            DiagnosticsLogger.event(this, "INFO", "webview", "blob_download_bridge_installed", null);
+        } catch (Throwable error) {
+            webDownloadBridgeScript = null;
+            DiagnosticsLogger.error(this, "webview", "blob_download_bridge_install_failed", error);
         }
     }
 
@@ -1853,7 +1892,7 @@ public class MainActivity extends Activity {
     private void showHomePanel(){runOnUiThread(()->{if(web!=null)web.setVisibility(View.GONE);if(home!=null)home.setVisibility(View.VISIBLE);refreshStatus();refreshImageGenStatus();renderImageModePanel();});}
         if(imagePackDirectoryAccess!=null){imagePackDirectoryAccess.cancelPending();imagePackDirectoryAccess.closeAllFileStreams();imagePackDirectoryAccess=null;}
         imagePackFolderPickerCapability="";imagePackFolderPickerScript=null;imagePackFolderPickerOrigin="";googleAuthBridgeCapability="";
-    private void destroyWeb(){if(webFileChooser!=null){webFileChooser.cancelPending();webFileChooser=null;}if(web==null)return;web.removeJavascriptInterface("WMLHost");root.removeView(web);web.stopLoading();web.loadUrl("about:blank");web.destroy();web=null;}
+    private void destroyWeb(){if(webDownloadHandler!=null){webDownloadHandler.cancelPending();webDownloadHandler=null;}webDownloadBridgeScript=null;if(webFileChooser!=null){webFileChooser.cancelPending();webFileChooser=null;}if(web==null)return;web.removeJavascriptInterface("WMLHost");root.removeView(web);web.stopLoading();web.loadUrl("about:blank");web.destroy();web=null;}
     @Override public void onBackPressed(){
         if(web!=null&&web.getVisibility()==View.VISIBLE){
             if(web.canGoBack())web.goBack();
@@ -2066,6 +2105,22 @@ public class MainActivity extends Activity {
                     DiagnosticsLogger.error(MainActivity.this,"oauth","google_access_token_cache_clear_failed",error);
                 }
             });
+        }
+        @JavascriptInterface public boolean beginBlobDownload(String requestId,String filename,String mimeType,long expectedBytes,String capability){
+            return hasGoogleAuthBridgeCapability(capability)&&webDownloadHandler!=null
+                    &&webDownloadHandler.beginDownload(requestId,filename,mimeType,expectedBytes);
+        }
+        @JavascriptInterface public boolean appendBlobDownloadChunk(String requestId,String encodedBytes,String capability){
+            return hasGoogleAuthBridgeCapability(capability)&&webDownloadHandler!=null
+                    &&webDownloadHandler.appendChunk(requestId,encodedBytes);
+        }
+        @JavascriptInterface public boolean finishBlobDownload(String requestId,String capability){
+            return hasGoogleAuthBridgeCapability(capability)&&webDownloadHandler!=null
+                    &&webDownloadHandler.finishDownload(requestId);
+        }
+        @JavascriptInterface public void abortBlobDownload(String requestId,String capability){
+            if(hasGoogleAuthBridgeCapability(capability)&&webDownloadHandler!=null)
+                webDownloadHandler.abortDownload(requestId);
         }
         @JavascriptInterface public void imageGenProxyFetch(String requestId,String method,String path,String headersJson,String bodyBase64){
             ImageGenProxy.dispatch(web,requestId,method,path,headersJson,bodyBase64);
