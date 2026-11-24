@@ -53,6 +53,7 @@ import java.lang.ref.WeakReference;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.Collections;
 import java.util.HashSet;
@@ -64,8 +65,9 @@ import java.util.UUID;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
-public final class MainActivity extends Activity {
-    private static final int PICK_TREE=4101, PICK_MOD_ZIP=4102, REQUEST_GOOGLE_AUTH=4103, REQUEST_NAI_SETTINGS=4104;
+public class MainActivity extends Activity {
+    private static final int PICK_TREE=4101, PICK_MOD_ZIP=4102, REQUEST_NAI_SETTINGS=4104;
+    private static final int REQUEST_GOOGLE_AUTH_MIN=60000, REQUEST_GOOGLE_AUTH_MAX=65534;
     private static final String PREFS="wayward_launcher";
     private static final String KEY_TREE="game_tree_uri", KEY_PROFILES="game_profiles", KEY_ZIP_REV="zip_mod_revision", KEY_COMFY_URL="comfy_server_url", KEY_IMAGE_MODE="image_server_mode";
     private static final String IMAGE_MODE_PACKS_ONLY="image-packs-only", IMAGE_MODE_GENERATION="image-generation", IMAGE_MODE_REMOTE_PC="remote-pc";
@@ -73,6 +75,7 @@ public final class MainActivity extends Activity {
     private static final Pattern ID=Pattern.compile("^[a-z0-9][a-z0-9._-]*$");
     private static final Set<String> RUNNING_SESSIONS=Collections.synchronizedSet(new HashSet<>());
     private static final Map<String,String> PENDING_GOOGLE_AUTH_RESULTS=new ConcurrentHashMap<>();
+    private final Set<String> ownedGoogleAuthResultNonces=Collections.newSetFromMap(new ConcurrentHashMap<String,Boolean>());
     // The home launcher and game sessions are separate Android document tasks.
     // Keep weak references so settings actions can return to the Activity that
     // actually owns the active game's WebView and SAF tree.
@@ -88,6 +91,8 @@ public final class MainActivity extends Activity {
     private final List<GameProfile> profiles=new ArrayList<>();
     private String activeProfileId="";
     private String pendingGoogleAuthNonce="";
+    private int nextGoogleAuthRequestCode=REQUEST_GOOGLE_AUTH_MIN;
+    private final Map<Integer,String> pendingGoogleAuthRequestNonces=new ConcurrentHashMap<>();
     private long loadedZipRevision=-1;
     private FrameLayout root;
     private LinearLayout home, profileList, zipModList;
@@ -112,7 +117,15 @@ public final class MainActivity extends Activity {
     private final List<Runnable> imageGenReadyCallbacks = new ArrayList<>();
     private Runnable imageGenPollRunnable;
     private WebView web;
+    private ImagePackDirectoryAccess imagePackDirectoryAccess;
+    private String imagePackDiagnosticSessionId = "";
+    private String imagePackFolderPickerScript;
+    private String imagePackFolderPickerOrigin = "";
+    private String imagePackFolderPickerCapability = "";
+    private String googleAuthBridgeCapability = "";
     private WebFileChooser webFileChooser;
+    private WebDownloadHandler webDownloadHandler;
+    private String webDownloadBridgeScript;
 
     @Override public void onCreate(Bundle b){
         super.onCreate(b);
@@ -126,12 +139,17 @@ public final class MainActivity extends Activity {
     }
     @Override protected void onResume(){
         super.onResume();
+        if(imagePackDirectoryAccess!=null)imagePackDirectoryAccess.onResume();
         DiagnosticsLogger.event(this,"INFO","launcher","activity_resume",null);
         loadProfiles();
         long revision=getSharedPreferences(PREFS,MODE_PRIVATE).getLong(KEY_ZIP_REV,0);
         if(web!=null&&revision!=loadedZipRevision){loadedZipRevision=revision;web.reload();}
         if(web!=null&&tree!=null)registerSessionActivity();
         if(home!=null&&home.getVisibility()==View.VISIBLE){renderProfiles();refreshStatus();refreshImageGenStatus();renderImageModePanel();}
+    }
+    @Override protected void onPause(){
+        if(imagePackDirectoryAccess!=null)imagePackDirectoryAccess.onPause();
+        super.onPause();
     }
     @Override protected void onNewIntent(Intent intent){
         super.onNewIntent(intent);setIntent(intent);
@@ -531,9 +549,11 @@ public final class MainActivity extends Activity {
             }
             return;
         }
-        if(req==REQUEST_GOOGLE_AUTH){
-            String nonce=pendingGoogleAuthNonce;pendingGoogleAuthNonce="";
-            if(nonce.isEmpty())return;
+        String authNonce=pendingGoogleAuthRequestNonces.remove(req);
+        if(authNonce!=null){
+            String nonce=authNonce;
+            if(!nonce.equals(pendingGoogleAuthNonce))return;
+            pendingGoogleAuthNonce="";
             if(result!=RESULT_OK||data==null){
                 storeGoogleAuthResult(nonce,null,"Google 계정 권한 승인이 취소되었습니다.");
                 return;
@@ -548,8 +568,16 @@ public final class MainActivity extends Activity {
             }
             return;
         }
-        if(req==WebFileChooser.REQUEST_CODE){
-            if(webFileChooser!=null)webFileChooser.handleActivityResult(result,data);
+        if(WebDownloadHandler.isRequestCode(req)){
+            if(webDownloadHandler!=null)webDownloadHandler.handleActivityResult(req,result,data);
+            return;
+        }
+        if(WebFileChooser.isRequestCode(req)){
+            if(webFileChooser!=null)webFileChooser.handleActivityResult(req,result,data);
+            return;
+        }
+        if(req==ImagePackDirectoryAccess.REQUEST_CODE){
+            if(imagePackDirectoryAccess!=null)imagePackDirectoryAccess.handleActivityResult(result,data);
             return;
         }
         if(req==PICK_TREE){
@@ -680,7 +708,7 @@ public final class MainActivity extends Activity {
     }
 
     private void launchProfileSession(String id){
-        Intent i=new Intent(this,MainActivity.class);i.setData(Uri.parse("wayward://session/"+Uri.encode(id)));
+        Intent i=new Intent(this,GameSessionActivity.class);i.setData(Uri.parse("wayward://session/"+Uri.encode(id)));
         i.addFlags(Intent.FLAG_ACTIVITY_NEW_DOCUMENT);startActivity(i);
     }
 
@@ -829,9 +857,11 @@ public final class MainActivity extends Activity {
         String domain=sessionDomain(activeProfileId);
         String origin=sessionOrigin(activeProfileId);
         int originPort=sessionPort(activeProfileId);
-        web=new WebView(this);WebSettings s=web.getSettings();s.setJavaScriptEnabled(true);s.setDomStorageEnabled(true);s.setDatabaseEnabled(true);s.setUseWideViewPort(true);s.setLoadWithOverviewMode(true);s.setTextZoom(100);s.setSupportZoom(true);s.setBuiltInZoomControls(false);s.setDisplayZoomControls(false);s.setAllowFileAccess(false);s.setAllowContentAccess(false);s.setCacheMode(WebSettings.LOAD_DEFAULT);s.setMixedContentMode(WebSettings.MIXED_CONTENT_NEVER_ALLOW);web.addJavascriptInterface(new HostBridge(),"WMLHost");
+        web=new WebView(this);imagePackDiagnosticSessionId=ImagePackDiagnostics.newSessionId();googleAuthBridgeCapability=ImagePackFolderPickerScript.createCapability();WebSettings s=web.getSettings();s.setJavaScriptEnabled(true);s.setDomStorageEnabled(true);s.setDatabaseEnabled(true);s.setUseWideViewPort(true);s.setLoadWithOverviewMode(true);s.setTextZoom(100);s.setSupportZoom(true);s.setBuiltInZoomControls(false);s.setDisplayZoomControls(false);s.setAllowFileAccess(false);s.setAllowContentAccess(false);s.setCacheMode(WebSettings.LOAD_DEFAULT);s.setMixedContentMode(WebSettings.MIXED_CONTENT_NEVER_ALLOW);imagePackDirectoryAccess=new ImagePackDirectoryAccess(this,web,activeProfileId,imagePackDiagnosticSessionId);imagePackDirectoryAccess.onResume();web.addJavascriptInterface(new HostBridge(),"WMLHost");
         installGoogleAuthBridgeScript(origin);
         installImageGenDocumentStartScript(origin);
+        installImagePackFolderPickerScript(origin);
+        installWebDownloadBridgeScript(origin);
         FolderHandler folderHandler=new FolderHandler(tree,getAssets(),zipMods,origin);
         WebViewAssetLoader loader=new WebViewAssetLoader.Builder().setDomain(domain+":"+originPort).addPathHandler("/game/",folderHandler).build();
         final java.util.concurrent.atomic.AtomicInteger imageDiagnostics=new java.util.concurrent.atomic.AtomicInteger();
@@ -843,6 +873,20 @@ public final class MainActivity extends Activity {
             }
             @Override public void onPageFinished(WebView view,String url){
                 DiagnosticsLogger.event(MainActivity.this,"INFO","webview","page_finished",null);
+                if(imagePackFolderPickerScript!=null
+                        &&ImagePackFolderPickerScript.isSameOrigin(url,imagePackFolderPickerOrigin)){
+                    ImagePackFolderPickerScript.installAfterPageFinished(
+                            view,url,imagePackFolderPickerOrigin,imagePackFolderPickerScript,installed->
+                                    DiagnosticsLogger.event(MainActivity.this,installed?"INFO":"ERROR","image-pack",
+                                            installed?"folder_picker_runtime_install_verified":"folder_picker_runtime_install_failed",null));
+                }
+                if(webDownloadBridgeScript!=null
+                        &&ImagePackFolderPickerScript.isSameOrigin(url,sessionOrigin(activeProfileId))){
+                    ImagePackFolderPickerScript.installAfterPageFinished(
+                            view,url,sessionOrigin(activeProfileId),webDownloadBridgeScript,installed->
+                                    DiagnosticsLogger.event(MainActivity.this,installed?"INFO":"ERROR","webview",
+                                            installed?"blob_download_runtime_install_verified":"blob_download_runtime_install_failed",null));
+                }
                 super.onPageFinished(view,url);
             }
             @Override public void onReceivedError(WebView view,WebResourceRequest request,android.webkit.WebResourceError error){
@@ -953,22 +997,103 @@ public final class MainActivity extends Activity {
                 String p=u.getScheme();if("https".equalsIgnoreCase(p)||"http".equalsIgnoreCase(p)||"mailto".equalsIgnoreCase(p)){try{startActivity(new Intent(Intent.ACTION_VIEW,u));return true;}catch(Exception ignored){return false;}}return true;
             }
         });
-        webFileChooser=new WebFileChooser(this);web.setWebChromeClient(webFileChooser);root.addView(web,new FrameLayout.LayoutParams(-1,-1));web.setVisibility(View.GONE);
+        webFileChooser=new WebFileChooser(this,imagePackDiagnosticSessionId);webDownloadHandler=new WebDownloadHandler(this,web);web.setWebChromeClient(webFileChooser);root.addView(web,new FrameLayout.LayoutParams(-1,-1));web.setVisibility(View.GONE);
     }
 
 
+    private void installImagePackFolderPickerScript(String origin) {
+        try {
+            imagePackFolderPickerCapability = ImagePackFolderPickerScript.createCapability();
+            imagePackFolderPickerScript = ImagePackFolderPickerScript.read(this, imagePackFolderPickerCapability);
+            imagePackFolderPickerOrigin = origin;
+            boolean registered = false;
+            if (WebViewFeature.isFeatureSupported(WebViewFeature.DOCUMENT_START_SCRIPT)) {
+                try {
+                    registered = ImagePackFolderPickerScript.installDocumentStart(
+                            web, imagePackFolderPickerScript, origin);
+                } catch (RuntimeException ignored) {}
+            }
+            DiagnosticsLogger.event(this, "INFO", "image-pack",
+                    registered ? "folder_picker_document_start_registered"
+                            : "folder_picker_runtime_fallback_enabled", null);
+        } catch (Exception error) {
+            imagePackFolderPickerScript = null;
+            imagePackFolderPickerCapability = "";
+            DiagnosticsLogger.error(this, "image-pack", "folder_picker_script_install", error);
+        }
+    }
+
+    private void installWebDownloadBridgeScript(String origin) {
+        webDownloadBridgeScript = null;
+        if (web == null || origin == null || origin.isEmpty()) return;
+        try (InputStream input = getAssets().open("wayward-download-bridge.js");
+             ByteArrayOutputStream output = new ByteArrayOutputStream()) {
+            byte[] buffer = new byte[4096];
+            int count;
+            while ((count = input.read(buffer)) != -1) {
+                output.write(buffer, 0, count);
+                if (output.size() > 64 * 1024) throw new IllegalStateException("Download bridge script is too large.");
+            }
+            String script = new String(output.toByteArray(), StandardCharsets.UTF_8);
+            String placeholder = "__WAYWARD_DOWNLOAD_CAPABILITY__";
+            if (!script.contains(placeholder)) throw new IllegalStateException("Download bridge capability placeholder is missing.");
+            script = script.replace(placeholder, googleAuthBridgeCapability);
+            webDownloadBridgeScript = script;
+            if (WebViewFeature.isFeatureSupported(WebViewFeature.DOCUMENT_START_SCRIPT)) {
+                WebViewCompat.addDocumentStartJavaScript(web, script, Collections.singleton(origin));
+                DiagnosticsLogger.event(this, "INFO", "webview", "blob_download_bridge_document_start_registered", null);
+            } else {
+                DiagnosticsLogger.event(this, "WARN", "webview", "blob_download_bridge_runtime_fallback_enabled", null);
+            }
+        } catch (Throwable error) {
+            webDownloadBridgeScript = null;
+            DiagnosticsLogger.error(this, "webview", "blob_download_bridge_install_failed", error);
+        }
+    }
+
     private void beginGoogleDriveAuth(String nonce){
+        beginGoogleDriveAuth(nonce,false);
+    }
+
+    private synchronized int reserveGoogleAuthRequestCode(String nonce){
+        // Never reuse a request code during this Activity lifetime. A cancelled
+        // PendingIntent may still deliver its ActivityResult after a later retry.
+        if(nextGoogleAuthRequestCode>REQUEST_GOOGLE_AUTH_MAX){
+            throw new IllegalStateException("Google 인증 요청 한도를 초과했습니다. 런처를 다시 시작해 주세요.");
+        }
+        int requestCode=nextGoogleAuthRequestCode++;
+        pendingGoogleAuthRequestNonces.put(requestCode,nonce);
+        return requestCode;
+    }
+
+    private void clearGoogleDriveAuthRequest(String nonce){
+        if(nonce==null)return;
+        if(nonce.equals(pendingGoogleAuthNonce))pendingGoogleAuthNonce="";
+        for(Integer requestCode:pendingGoogleAuthRequestNonces.keySet()){
+            if(nonce.equals(pendingGoogleAuthRequestNonces.get(requestCode))){
+                pendingGoogleAuthRequestNonces.remove(requestCode,nonce);
+            }
+        }
+        PENDING_GOOGLE_AUTH_RESULTS.remove(nonce);
+        ownedGoogleAuthResultNonces.remove(nonce);
+    }
+
+    private void beginGoogleDriveAuth(String nonce,boolean forceSelectAccount){
         if(nonce==null||!nonce.matches("[a-f0-9]{48}"))return;
         if(!pendingGoogleAuthNonce.isEmpty()){
             storeGoogleAuthResult(nonce,null,"이미 다른 Google 권한 요청이 진행 중입니다.");
             return;
         }
+        PENDING_GOOGLE_AUTH_RESULTS.remove(nonce);
         pendingGoogleAuthNonce=nonce;
         try{
-            AuthorizationRequest request=AuthorizationRequest.builder()
+            AuthorizationRequest.Builder requestBuilder=AuthorizationRequest.builder()
                     .setRequestedScopes(Collections.singletonList(
-                            new Scope("https://www.googleapis.com/auth/drive.appdata")))
-                    .build();
+                            new Scope("https://www.googleapis.com/auth/drive.appdata")));
+            if(forceSelectAccount){
+                requestBuilder.setPrompt(AuthorizationRequest.Prompt.SELECT_ACCOUNT);
+            }
+            AuthorizationRequest request=requestBuilder.build();
             Identity.getAuthorizationClient(this).authorize(request)
                     .addOnSuccessListener(authorizationResult->{
                         if(!nonce.equals(pendingGoogleAuthNonce))return;
@@ -976,30 +1101,33 @@ public final class MainActivity extends Activity {
                             try{
                                 android.app.PendingIntent pending=authorizationResult.getPendingIntent();
                                 if(pending==null)throw new IllegalStateException("Google 권한 확인 화면을 열 수 없습니다.");
-                                startIntentSenderForResult(pending.getIntentSender(),REQUEST_GOOGLE_AUTH,null,0,0,0);
+                                int requestCode=reserveGoogleAuthRequestCode(nonce);
+                                startIntentSenderForResult(pending.getIntentSender(),requestCode,null,0,0,0);
                             }catch(android.content.IntentSender.SendIntentException error){
-                                pendingGoogleAuthNonce="";
+                                clearGoogleDriveAuthRequest(nonce);
                                 storeGoogleAuthResult(nonce,null,"Google 권한 화면을 시작하지 못했습니다: "+msg(error));
                             }catch(Throwable error){
-                                pendingGoogleAuthNonce="";
+                                clearGoogleDriveAuthRequest(nonce);
                                 storeGoogleAuthResult(nonce,null,"Google 권한 요청 실패: "+msg(error));
                             }
                         }else{
-                            pendingGoogleAuthNonce="";
+                            clearGoogleDriveAuthRequest(nonce);
                             storeGoogleAuthResult(nonce,authorizationResult.getAccessToken(),null);
                         }
                     })
                     .addOnFailureListener(error->{
-                        if(nonce.equals(pendingGoogleAuthNonce))pendingGoogleAuthNonce="";
-                        storeGoogleAuthResult(nonce,null,"Google Drive 권한 요청 실패: "+msg(error));
+                        if(nonce.equals(pendingGoogleAuthNonce)){
+                            clearGoogleDriveAuthRequest(nonce);
+                            storeGoogleAuthResult(nonce,null,"Google Drive 권한 요청 실패: "+msg(error));
+                        }
                     });
         }catch(Throwable error){
-            pendingGoogleAuthNonce="";
+            clearGoogleDriveAuthRequest(nonce);
             storeGoogleAuthResult(nonce,null,"Google 인증 서비스를 사용할 수 없습니다: "+msg(error));
         }
     }
 
-    private static void storeGoogleAuthResult(String nonce,String accessToken,String error){
+    private void storeGoogleAuthResult(String nonce,String accessToken,String error){
         if(nonce==null||!nonce.matches("[a-f0-9]{48}"))return;
         JSONObject payload=new JSONObject();
         try{
@@ -1013,6 +1141,7 @@ public final class MainActivity extends Activity {
                 payload.put("message",error==null?"Google에서 액세스 토큰을 반환하지 않았습니다.":error);
             }
             PENDING_GOOGLE_AUTH_RESULTS.put(nonce,payload.toString());
+            ownedGoogleAuthResultNonces.add(nonce);
         }catch(Exception ignored){}
     }
 
@@ -1025,8 +1154,14 @@ public final class MainActivity extends Activity {
         try(InputStream input=getAssets().open("wayward-google-auth-bridge.js");
             ByteArrayOutputStream output=new ByteArrayOutputStream()){
             byte[] buffer=new byte[4096];int count;
-            while((count=input.read(buffer))!=-1)output.write(buffer,0,count);
+            while((count=input.read(buffer))!=-1){
+                output.write(buffer,0,count);
+                if(output.size()>64*1024)throw new IllegalStateException("Google auth bridge script is too large.");
+            }
             String script=new String(output.toByteArray(),StandardCharsets.UTF_8);
+            String placeholder="__WAYWARD_GOOGLE_AUTH_CAPABILITY__";
+            if(!script.contains(placeholder))throw new IllegalStateException("Google auth bridge capability placeholder is missing.");
+            script=script.replace(placeholder,googleAuthBridgeCapability);
             WebViewCompat.addDocumentStartJavaScript(web,script,Collections.singleton(gameOrigin));
             DiagnosticsLogger.event(this,"INFO","oauth","native_google_auth_bridge_installed",null);
         }catch(Throwable error){
@@ -1044,16 +1179,27 @@ public final class MainActivity extends Activity {
     }
 
     private boolean imageGenerationRoutingActive(){
-        ImageGenStatusStore.State state=ImageGenStatusStore.read(getFilesDir());
-        return state.isReady()||state.isAvailable()||state.isStarting();
+        // The selected launcher mode is authoritative; stale service state must not
+        // redirect ordinary image-pack/CDN requests into the generated-image cache.
+        return IMAGE_MODE_GENERATION.equals(currentImageMode());
     }
 
     private WebResourceResponse serveImageRequestByMode(FolderHandler handler,String path,
             java.util.concurrent.atomic.AtomicInteger samples){
+        final String generatedPrefix="/images/__wayward_generated__/";
+        if(path==null||!path.startsWith("/images/"))return null;
+        boolean alreadyGenerated=path.startsWith(generatedPrefix);
+        String originalPath=alreadyGenerated
+                ? "/images/"+path.substring(generatedPrefix.length()) : path;
         if(imageGenerationRoutingActive()){
-            return serveGeneratedImageRequest("/images/__wayward_generated__/"+path.substring(8),samples);
+            String generatedPath=alreadyGenerated?path:generatedPrefix+path.substring(8);
+            WebResourceResponse generated=serveGeneratedImageRequest(generatedPath,samples);
+            if(generated!=null){
+                int status=generated.getStatusCode();
+                if(status==200||status==400||status==403)return generated;
+            }
         }
-        return serveImageRequest(handler,path,samples);
+        return serveImageRequest(handler,originalPath,samples);
     }
 
     private WebResourceResponse serveImageRequest(FolderHandler handler,String path,
@@ -1092,29 +1238,29 @@ public final class MainActivity extends Activity {
             String requestPath, java.util.concurrent.atomic.AtomicInteger samples) {
         final String prefix = "/images/__wayward_generated__/";
         if (requestPath == null || !requestPath.startsWith(prefix)) {
-            return generatedImageError(404, "Not Found", requestPath);
+            return generatedImageError(404, "Not Found", requestPath, samples);
         }
         try {
             String relative = FolderHandler.normal(requestPath.substring(prefix.length()));
-            if (relative == null) return generatedImageError(400, "Bad Request", requestPath);
+            if (relative == null) return generatedImageError(400, "Bad Request", requestPath, samples);
 
             String mime = FolderHandler.mime(relative);
             if (!("image/png".equals(mime) || "image/jpeg".equals(mime)
                     || "image/webp".equals(mime) || "image/gif".equals(mime)
                     || "image/avif".equals(mime))) {
-                return generatedImageError(415, "Unsupported Media Type", requestPath);
+                return generatedImageError(415, "Unsupported Media Type", requestPath, samples);
             }
 
             File root = new File(getFilesDir(), "imagegen/images").getCanonicalFile();
             File image = new File(root, relative).getCanonicalFile();
             String rootPrefix = root.getPath() + File.separator;
             if (!image.getPath().startsWith(rootPrefix)) {
-                return generatedImageError(403, "Forbidden", requestPath);
+                return generatedImageError(403, "Forbidden", requestPath, samples);
             }
             if (!image.isFile()) return generatedImageError(404, "Not Found", requestPath);
             long length = image.length();
             if (length <= 0 || length > 25L * 1024L * 1024L) {
-                return generatedImageError(413, "Content Too Large", requestPath);
+                return generatedImageError(413, "Content Too Large", requestPath, samples);
             }
 
             java.util.HashMap<String, String> headers = new java.util.HashMap<>();
@@ -1124,18 +1270,21 @@ public final class MainActivity extends Activity {
         } catch (java.io.FileNotFoundException error) {
             return generatedImageError(404, "Not Found", requestPath);
         } catch (Exception error) {
-            return generatedImageError(500, "Read Error", requestPath);
+            return generatedImageError(500, "Read Error", requestPath, samples);
         }
     }
 
-    private WebResourceResponse generatedImageError(int status, String reason, String requestPath) {
-        try {
-            JSONObject diagnostic = new JSONObject();
-            diagnostic.put("srcKind", "generated_image");
-            diagnostic.put("responseStatus", status);
-            ImagePipelineDiagnostics.addSanitizedPath(diagnostic, requestPath);
-            ImagePipelineDiagnostics.record(this, "webview_generated_image_resource_error", diagnostic);
-        } catch (Exception ignored) {}
+    private WebResourceResponse generatedImageError(int status, String reason, String requestPath,
+            java.util.concurrent.atomic.AtomicInteger samples) {
+        if(status!=404&&status!=415&&(samples==null||samples.getAndIncrement()<16)){
+            try {
+                JSONObject diagnostic = new JSONObject();
+                diagnostic.put("srcKind", "generated_image");
+                diagnostic.put("responseStatus", status);
+                ImagePipelineDiagnostics.addSanitizedPath(diagnostic, requestPath);
+                ImagePipelineDiagnostics.record(this, "webview_generated_image_resource_error", diagnostic);
+            } catch (Exception ignored) {}
+        }
         byte[] body = "Generated image unavailable".getBytes(StandardCharsets.UTF_8);
         java.util.HashMap<String, String> headers = new java.util.HashMap<>();
         headers.put("Cache-Control", "no-store");
@@ -1160,6 +1309,11 @@ public final class MainActivity extends Activity {
                         if (out.size() > 64 * 1024) throw new IllegalStateException(assetName + " 파일이 너무 큽니다.");
                     }
                     String source = new String(out.toByteArray(), StandardCharsets.UTF_8);
+                    if ("imagegen-proxy.js".equals(assetName)) {
+                        String placeholder = "__WAYWARD_IMAGEGEN_CAPABILITY__";
+                        if (!source.contains(placeholder)) throw new IllegalStateException("ImageGen proxy capability placeholder is missing.");
+                        source = source.replace(placeholder, googleAuthBridgeCapability);
+                    }
                     WebViewCompat.addDocumentStartJavaScript(
                             web, source, Collections.singleton(origin));
                 }
@@ -1233,6 +1387,26 @@ public final class MainActivity extends Activity {
 
     private void ensureImageGenServer(SafTree sessionTree, Runnable afterReady) {
         if (afterReady != null) imageGenReadyCallbacks.add(afterReady);
+        if (!IMAGE_MODE_GENERATION.equals(currentImageMode())) {
+            imageGenSessionMessage = "런처에서 이미지 생성 모드를 선택하지 않아 서버 자동 시작을 건너뛰었습니다.";
+            refreshImageGenStatus();
+            finishImageGenCallbacks();
+            return;
+        }
+        try {
+            String token = NovelAiTokenStore.readToken(this);
+            if (token == null || token.trim().isEmpty()) {
+                imageGenSessionMessage = "런처에 NovelAI 토큰을 먼저 등록해야 합니다.";
+                refreshImageGenStatus();
+                finishImageGenCallbacks();
+                return;
+            }
+        } catch (Exception error) {
+            imageGenSessionMessage = "런처 NovelAI 보안 저장소를 읽지 못했습니다: " + msg(error);
+            refreshImageGenStatus();
+            finishImageGenCallbacks();
+            return;
+        }
         if (sessionTree == null) {
             imageGenSessionMessage = "현재 게임 세션의 폴더를 확인할 수 없어 이미지 서버 자동 시작을 건너뛰었습니다.";
             finishImageGenCallbacks();
@@ -1455,9 +1629,9 @@ public final class MainActivity extends Activity {
                 // delivering the UI action on some Android document-task stacks.
                 try {
                     session.openImageGenPanel();
-                    Intent route = new Intent(this, MainActivity.class);
+                    Intent route = new Intent(this, GameSessionActivity.class);
                     route.setData(Uri.parse("wayward://session/" + Uri.encode(sessionId)));
-                    route.addFlags(Intent.FLAG_ACTIVITY_NEW_DOCUMENT | Intent.FLAG_ACTIVITY_REORDER_TO_FRONT);
+                    route.addFlags(Intent.FLAG_ACTIVITY_NEW_DOCUMENT);
                     startActivity(route);
                     DiagnosticsLogger.event(this,"INFO","imagegen","session_settings_routed",null);
                     return;
@@ -1469,8 +1643,12 @@ public final class MainActivity extends Activity {
             return;
         }
         Runnable openSettings = () -> {
+            if (!IMAGE_MODE_GENERATION.equals(currentImageMode())) {
+                Toast.makeText(this, "런처에서 이미지 생성 모드를 선택한 뒤 Image Studio 생성 설정을 열 수 있습니다.", Toast.LENGTH_LONG).show();
+                return;
+            }
             ImageGenStatusStore.State state = ImageGenStatusStore.read(getFilesDir());
-            if (!state.isAvailable()) {
+            if (!state.isReady()) {
                 String detail = state.message == null || state.message.isEmpty()
                         ? "이미지 서버 응답을 확인하지 못했습니다." : state.message;
                 Toast.makeText(this,detail,Toast.LENGTH_LONG).show();
@@ -1748,8 +1926,41 @@ public final class MainActivity extends Activity {
     }
 
     private void showHomePanel(){runOnUiThread(()->{if(web!=null)web.setVisibility(View.GONE);if(home!=null)home.setVisibility(View.VISIBLE);refreshStatus();refreshImageGenStatus();renderImageModePanel();});}
-    private void destroyWeb(){if(webFileChooser!=null){webFileChooser.cancelPending();webFileChooser=null;}if(web==null)return;web.removeJavascriptInterface("WMLHost");root.removeView(web);web.stopLoading();web.loadUrl("about:blank");web.destroy();web=null;}
-    @Override public void onBackPressed(){if(web!=null&&web.getVisibility()==View.VISIBLE){if(web.canGoBack())web.goBack();else showHomePanel();return;}super.onBackPressed();}
+        if(imagePackDirectoryAccess!=null){imagePackDirectoryAccess.cancelPending();imagePackDirectoryAccess.closeAllFileStreams();imagePackDirectoryAccess=null;}
+        imagePackFolderPickerCapability="";imagePackFolderPickerScript=null;imagePackFolderPickerOrigin="";googleAuthBridgeCapability="";
+    private void destroyWeb(){
+        if(!pendingGoogleAuthNonce.isEmpty())clearGoogleDriveAuthRequest(pendingGoogleAuthNonce);
+        for(String nonce:new java.util.ArrayList<>(ownedGoogleAuthResultNonces))clearGoogleDriveAuthRequest(nonce);
+        if(imagePackDirectoryAccess!=null){
+            imagePackDirectoryAccess.cancelPending();
+            imagePackDirectoryAccess.closeAllFileStreams();
+            imagePackDirectoryAccess=null;
+        }
+        if(webDownloadHandler!=null){webDownloadHandler.cancelPending();webDownloadHandler=null;}
+        if(webFileChooser!=null){webFileChooser.cancelPending();webFileChooser=null;}
+        imagePackFolderPickerCapability="";
+        imagePackFolderPickerScript=null;
+        imagePackFolderPickerOrigin="";
+        googleAuthBridgeCapability="";
+        webDownloadBridgeScript=null;
+        imagePackDiagnosticSessionId="";
+        if(web==null)return;
+        web.removeJavascriptInterface("WMLHost");
+        root.removeView(web);
+        web.stopLoading();
+        web.loadUrl("about:blank");
+        web.destroy();
+        web=null;
+    }
+    @Override public void onBackPressed(){
+        if(web!=null&&web.getVisibility()==View.VISIBLE){
+            if(web.canGoBack())web.goBack();
+            else if(sessionProfileId(getIntent())!=null)finish();
+            else showHomePanel();
+            return;
+        }
+        super.onBackPressed();
+    }
     @Override protected void onDestroy(){
         String sessionId=sessionProfileId(getIntent());if(sessionId!=null)RUNNING_SESSIONS.remove(sessionId);
         unregisterSessionActivity();
@@ -1758,23 +1969,161 @@ public final class MainActivity extends Activity {
     }
     private String msg(Throwable e){return e==null||e.getMessage()==null?"알 수 없는 오류":e.getMessage();}
     private final class HostBridge{
+        private boolean hasImagePackBridgeCapability(String capability) {
+            return ImagePackFolderPickerScript.matchesCapability(
+                    imagePackFolderPickerCapability, capability);
+        }
+        private String imagePackBridgeDenied() {
+            return "{\"ok\":false,\"name\":\"SecurityError\",\"message\":\"The SAF bridge capability is invalid.\"}";
+        }
+        @JavascriptInterface public String version(){return "1.0.0";}
+        @JavascriptInterface public void recordImagePackDiagnostic(String requestId, String stage, String detailsJson){
+            ImagePackDiagnostics.javascriptEvent(MainActivity.this, imagePackDiagnosticSessionId,
+                    requestId, stage, detailsJson);
+        }
+        @JavascriptInterface public void chooseImagePackFolder(String requestId, String capability, String mode, String initialUri){
+            // JavascriptInterface methods run on WebView's private background thread.
+            // WebView state and native Activity launches must be handled on the UI thread.
+            MainActivity.this.runOnUiThread(() ->
+                    chooseImagePackFolderOnUiThread(requestId, capability, mode, initialUri));
+        }
+        private void chooseImagePackFolderOnUiThread(String requestId, String capability, String mode, String initialUri) {
+            try {
+                boolean trustedOrigin = web != null && activeProfileId != null
+                        && ImagePackFolderPickerScript.isSameOrigin(web.getUrl(), imagePackFolderPickerOrigin)
+                        && imagePackFolderPickerOrigin.equals(sessionOrigin(activeProfileId));
+                boolean trustedCapability = ImagePackFolderPickerScript.matchesCapability(
+                        imagePackFolderPickerCapability, capability);
+                if (!trustedOrigin || !trustedCapability) {
+                    ImagePackDiagnostics.event(MainActivity.this, imagePackDiagnosticSessionId, requestId,
+                            "wmlhost_choose_folder_rejected", "error",
+                            ImagePackDiagnostics.details("requestSource", "showDirectoryPicker",
+                                    "originValidated", trustedOrigin, "capabilityValidated", trustedCapability));
+                    if (imagePackDirectoryAccess != null) imagePackDirectoryAccess.rejectRequest(requestId,
+                            trustedOrigin ? "NotAllowedError" : "SecurityError",
+                            "The image-pack folder request was rejected by the native security boundary.");
+                    return;
+                }
+                ImagePackDiagnostics.event(MainActivity.this, imagePackDiagnosticSessionId, requestId,
+                        "wmlhost_choose_folder_entered", "info",
+                        ImagePackDiagnostics.details("requestSource", "showDirectoryPicker",
+                                "originValidated", true, "capabilityValidated", true));
+                if (imagePackDirectoryAccess != null) {
+                    imagePackDirectoryAccess.openFolderPicker(requestId, mode, initialUri);
+                } else {
+                    ImagePackDiagnostics.event(MainActivity.this, imagePackDiagnosticSessionId, requestId,
+                            "wmlhost_directory_access_missing", "error", null);
+                    if (web != null) web.evaluateJavascript("(function(){if(typeof window.__waywardNativeImagePackPickerDispatch==='function')"
+                            + "window.__waywardNativeImagePackPickerDispatch(" + JSONObject.quote(requestId)
+                            + ",{ok:false,name:'NotReadableError',message:'Native folder access is unavailable.',state:'FAILED'});})()", null);
+                }
+            } catch (Exception error) {
+                ImagePackDiagnostics.error(MainActivity.this, imagePackDiagnosticSessionId, requestId,
+                        "wmlhost_choose_folder_ui_dispatch_failed", error);
+                if (imagePackDirectoryAccess != null) imagePackDirectoryAccess.rejectRequest(requestId,
+                        "NotAllowedError", "Android could not start the system image-pack folder picker.");
+            }
+        }
+        @JavascriptInterface public String listImagePackDirectoryForRequest(String capability, String documentUri, String requestId){
+            if (!hasImagePackBridgeCapability(capability)) return imagePackBridgeDenied();
+            if (imagePackDirectoryAccess == null) return "{\"ok\":false,\"name\":\"NotFoundError\"}";
+            if (documentUri != null && documentUri.startsWith("__WAYWARD_DIR_START__:")) {
+                return imagePackDirectoryAccess.startListDirectory(
+                        documentUri.substring("__WAYWARD_DIR_START__:".length()), requestId);
+            }
+            if (documentUri != null && documentUri.startsWith("__WAYWARD_DIR_ACK__:")) {
+                try {
+                    int batchIndex = Integer.parseInt(
+                            documentUri.substring("__WAYWARD_DIR_ACK__:".length()));
+                    if (batchIndex < 0) throw new NumberFormatException("negative batch index");
+                    return imagePackDirectoryAccess.acknowledgeDirectoryBatch(requestId, batchIndex)
+                            ? "{\"ok\":true}"
+                            : "{\"ok\":false,\"name\":\"AbortError\",\"message\":\"The SAF batch is no longer active.\"}";
+                } catch (NumberFormatException invalidBatch) {
+                    return "{\"ok\":false,\"name\":\"TypeError\",\"message\":\"The SAF batch index is invalid.\"}";
+                }
+            }
+            if (documentUri != null && documentUri.startsWith("__WAYWARD_DIR_CANCEL__:")) {
+                boolean cancelled = imagePackDirectoryAccess.cancelDirectoryList(requestId);
+                return "{\"ok\":true,\"cancelled\":" + cancelled + "}";
+            }
+            if (documentUri != null && documentUri.startsWith("__WAYWARD_DIR_RELEASE__:")) {
+                imagePackDirectoryAccess.releaseDirectoryTreeForRequest(requestId);
+                return "{\"ok\":true}";
+            }
+            return imagePackDirectoryAccess.listDirectoryJson(documentUri,requestId);
+        }
+        @JavascriptInterface public String readImagePackFileForRequest(String capability, String documentUri, String requestId){
+            if (!hasImagePackBridgeCapability(capability)) return imagePackBridgeDenied();
+            return imagePackDirectoryAccess==null?"{\"ok\":false,\"name\":\"NotFoundError\"}":imagePackDirectoryAccess.readFileJson(documentUri,requestId);
+        }
+        @JavascriptInterface public String openImagePackFileStreamForRequest(String capability, String documentUri, String start, String length, String requestId){
+            if (!hasImagePackBridgeCapability(capability)) return imagePackBridgeDenied();
+            return imagePackDirectoryAccess==null?"{\"ok\":false,\"name\":\"NotFoundError\"}":imagePackDirectoryAccess.openFileStreamJson(documentUri,start,length,requestId);
+        }
+        @JavascriptInterface public String readImagePackFileStreamChunkForRequest(String capability, String streamId, String maxBytes, String requestId){
+            if (!hasImagePackBridgeCapability(capability)) return imagePackBridgeDenied();
+            return imagePackDirectoryAccess==null?"{\"ok\":false,\"name\":\"NotFoundError\"}":imagePackDirectoryAccess.readFileStreamChunkJson(streamId,maxBytes,requestId);
+        }
+        @JavascriptInterface public String closeImagePackFileStreamForRequest(String capability, String streamId, String requestId){
+            if (!hasImagePackBridgeCapability(capability)) return imagePackBridgeDenied();
+            return imagePackDirectoryAccess==null?"{\"ok\":false,\"name\":\"NotFoundError\"}":imagePackDirectoryAccess.closeFileStreamJson(streamId,requestId);
+        }
+        @JavascriptInterface public String createImagePackFile(String capability, String parentUri,String name,String mime,String requestId){
+            if (!hasImagePackBridgeCapability(capability)) return imagePackBridgeDenied();
+            return imagePackDirectoryAccess==null?"{\"ok\":false,\"name\":\"NotFoundError\"}":imagePackDirectoryAccess.createFileJson(parentUri,name,mime,requestId);
+        }
+        @JavascriptInterface public String writeImagePackFile(String capability, String documentUri,String mime,String data,String requestId){
+            if (!hasImagePackBridgeCapability(capability)) return imagePackBridgeDenied();
+            return imagePackDirectoryAccess==null?"{\"ok\":false,\"name\":\"NotFoundError\"}":imagePackDirectoryAccess.writeFileJson(documentUri,mime,data,requestId);
+        }
+        @JavascriptInterface public String createImagePackDirectory(String capability, String parentUri,String name,String requestId){
+            if (!hasImagePackBridgeCapability(capability)) return imagePackBridgeDenied();
+            return imagePackDirectoryAccess==null?"{\"ok\":false,\"name\":\"NotFoundError\"}":imagePackDirectoryAccess.createDirectoryJson(parentUri,name,requestId);
+        }
+        @JavascriptInterface public String deleteImagePackEntry(String capability, String documentUri,String requestId){
+            if (!hasImagePackBridgeCapability(capability)) return imagePackBridgeDenied();
+            return imagePackDirectoryAccess==null?"{\"ok\":false,\"name\":\"NotFoundError\"}":imagePackDirectoryAccess.deleteEntryJson(documentUri,requestId);
+        }
+        @JavascriptInterface public String resolveImagePackEntry(String capability, String parentUri,String targetUri,String requestId){
+            if (!hasImagePackBridgeCapability(capability)) return imagePackBridgeDenied();
+            return imagePackDirectoryAccess==null?"{\"ok\":false,\"name\":\"NotFoundError\"}":imagePackDirectoryAccess.resolveEntryJson(parentUri,targetUri,requestId);
+        }
+        @JavascriptInterface public String getImagePackFolderInfo(String capability){
+            if (!hasImagePackBridgeCapability(capability)) return imagePackBridgeDenied();
+            return imagePackDirectoryAccess==null?"{\"ok\":false,\"name\":\"NotFoundError\"}":imagePackDirectoryAccess.getFolderInfoJson();
+        }
         @JavascriptInterface public String version(){return "1.0.0";}
         @JavascriptInterface public String listModIds(){
             try{JSONObject r=new JSONObject();JSONArray a=new JSONArray();for(String id:allModIds())a.put(id);r.put("ok",true);r.put("ids",a);return r.toString();}
             catch(Exception e){try{JSONObject r=new JSONObject();r.put("ok",false);r.put("ids",new JSONArray());return r.toString();}catch(Exception ignored){return "{}";}}
         }
         @JavascriptInterface public void menu(){showHomePanel();}
-        @JavascriptInterface public void startGoogleDriveAuth(String nonce){
-            if(nonce==null||!nonce.matches("[a-f0-9]{48}"))return;
-            runOnUiThread(()->beginGoogleDriveAuth(nonce));
+        private boolean hasGoogleAuthBridgeCapability(String supplied){
+            // The capability is injected only into the session's exact origin and is unique per WebView.
+            // Avoid calling WebView.getUrl() from JavascriptInterface's background thread.
+            return ImagePackFolderPickerScript.matchesCapability(googleAuthBridgeCapability,supplied);
         }
-        @JavascriptInterface public String takePendingStateForNonce(String nonce){
-            if(nonce==null||!nonce.matches("[a-f0-9]{48}"))return "";
+        @JavascriptInterface public void startGoogleDriveAuth(String nonce,String capability){
+            if(!hasGoogleAuthBridgeCapability(capability)||nonce==null||!nonce.matches("[a-f0-9]{48}"))return;
+            runOnUiThread(()->beginGoogleDriveAuth(nonce,false));
+        }
+        @JavascriptInterface public void startGoogleDriveAuthWithPolicy(String nonce,boolean forceSelectAccount,String capability){
+            if(!hasGoogleAuthBridgeCapability(capability)||nonce==null||!nonce.matches("[a-f0-9]{48}"))return;
+            runOnUiThread(()->beginGoogleDriveAuth(nonce,forceSelectAccount));
+        }
+        @JavascriptInterface public void cancelGoogleDriveAuth(String nonce,String capability){
+            if(!hasGoogleAuthBridgeCapability(capability)||nonce==null||!nonce.matches("[a-f0-9]{48}"))return;
+            runOnUiThread(()->clearGoogleDriveAuthRequest(nonce));
+        }
+        @JavascriptInterface public String takePendingStateForNonce(String nonce,String capability){
+            if(!hasGoogleAuthBridgeCapability(capability)||nonce==null||!nonce.matches("[a-f0-9]{48}"))return "";
             String result=PENDING_GOOGLE_AUTH_RESULTS.remove(nonce);
+            ownedGoogleAuthResultNonces.remove(nonce);
             return result==null?"":result;
         }
-        @JavascriptInterface public void clearGoogleAccessToken(String token){
-            if(token==null||token.isEmpty()||token.length()>4096)return;
+        @JavascriptInterface public void clearGoogleAccessToken(String token,String capability){
+            if(!hasGoogleAuthBridgeCapability(capability)||token==null||token.isEmpty()||token.length()>4096)return;
             runOnUiThread(()->{
                 try{
                     Identity.getAuthorizationClient(MainActivity.this)
@@ -1785,22 +2134,66 @@ public final class MainActivity extends Activity {
                 }
             });
         }
-        @JavascriptInterface public void imageGenProxyFetch(String requestId,String method,String path,String headersJson,String bodyBase64){
+        @JavascriptInterface public boolean beginBlobDownload(String requestId,String filename,String mimeType,long expectedBytes,String capability){
+            return hasGoogleAuthBridgeCapability(capability)&&webDownloadHandler!=null
+                    &&webDownloadHandler.beginDownload(requestId,filename,mimeType,expectedBytes);
+        }
+        @JavascriptInterface public boolean appendBlobDownloadChunk(String requestId,String encodedBytes,String capability){
+            return hasGoogleAuthBridgeCapability(capability)&&webDownloadHandler!=null
+                    &&webDownloadHandler.appendChunk(requestId,encodedBytes);
+        }
+        @JavascriptInterface public boolean finishBlobDownload(String requestId,String capability){
+            return hasGoogleAuthBridgeCapability(capability)&&webDownloadHandler!=null
+                    &&webDownloadHandler.finishDownload(requestId);
+        }
+        @JavascriptInterface public void abortBlobDownload(String requestId,String capability){
+            if(hasGoogleAuthBridgeCapability(capability)&&webDownloadHandler!=null)
+                webDownloadHandler.abortDownload(requestId);
+        }
+        @JavascriptInterface public void imageGenProxyFetch(String requestId,String method,String path,String headersJson,String bodyBase64,String capability){
+            if(!hasGoogleAuthBridgeCapability(capability))return;
+            if(path!=null&&path.startsWith("/api/nai-compat/")){
+                NovelAiRequestProxy.dispatch(web,requestId,method,path,headersJson,bodyBase64,imageGenerationRoutingActive());
+                return;
+            }
+            if(!imageGenerationRoutingActive()){
+                ImageGenProxy.reject(web,requestId,403,"런처에서 이미지 생성 모드를 선택해야 합니다.");
+                return;
+            }
+            try{
+                String token=NovelAiTokenStore.readToken(MainActivity.this);
+                if(token==null||token.trim().isEmpty()){
+                    ImageGenProxy.reject(web,requestId,401,"런처에 NovelAI 토큰을 먼저 등록해야 합니다.");
+                    return;
+                }
+            }catch(Exception error){
+                ImageGenProxy.reject(web,requestId,503,"NovelAI 보안 저장소를 읽지 못했습니다.");
+                return;
+            }
             ImageGenProxy.dispatch(web,requestId,method,path,headersJson,bodyBase64);
         }
         @JavascriptInterface public String imageGenRuntimeStatus(){
             ImageGenStatusStore.State state=ImageGenStatusStore.read(getFilesDir());
+            boolean modeEnabled=imageGenerationRoutingActive();
+            boolean tokenAvailable=false;
+            try{
+                String token=NovelAiTokenStore.readToken(MainActivity.this);
+                tokenAvailable=token!=null&&!token.trim().isEmpty();
+            }catch(Exception ignored){}
+            boolean usable=modeEnabled&&tokenAvailable;
             try{
                 JSONObject value=new JSONObject();
-                value.put("available",state.isAvailable());
-                value.put("starting",state.isStarting());
-                value.put("ready",state.isReady());
+                value.put("available",usable&&state.isAvailable());
+                value.put("starting",usable&&state.isStarting());
+                value.put("ready",usable&&state.isReady());
+                value.put("modeEnabled",modeEnabled);
+                value.put("tokenAvailable",tokenAvailable);
                 value.put("backendVersion",state.backendVersion);
                 String[] parts=state.backendVersion.split(":");
                 value.put("engine",parts.length>=3?parts[2]:"unknown");
-                value.put("message",state.message);
+                value.put("message",!modeEnabled?"이미지팩 전용 모드입니다.":!tokenAvailable?"NovelAI 토큰을 등록해야 합니다.":state.message);
                 return value.toString();
-            }catch(Exception ignored){return "{\"available\":false,\"starting\":false,\"ready\":false,\"backendVersion\":\"\",\"engine\":\"unknown\"}";}
+            }catch(Exception ignored){return "{\"available\":false,\"starting\":false,\"ready\":false,\"modeEnabled\":false,\"tokenAvailable\":false,\"backendVersion\":\"\",\"engine\":\"unknown\"}";}
         }
         @JavascriptInterface public void logImageProviderDiagnostic(String event,String detailsJson){
             ImagePipelineDiagnostics.recordJson(MainActivity.this,event,detailsJson);
