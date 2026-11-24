@@ -23,6 +23,7 @@ final class ImageGenProxy {
     private static final int CONNECT_TIMEOUT_MS = 10000;
     private static final int READ_TIMEOUT_MS = 15 * 60 * 1000;
     private static final int MAX_REQUEST_BYTES = 8 * 1024 * 1024;
+    private static final int MAX_REQUEST_BASE64_CHARS = ((MAX_REQUEST_BYTES + 2) / 3) * 4 + 16;
     private static final int MAX_RESPONSE_BYTES = 64 * 1024 * 1024;
 
     private ImageGenProxy() {}
@@ -97,6 +98,10 @@ final class ImageGenProxy {
         new Thread(() -> {
             HttpURLConnection connection = null;
             try {
+                if (bodyBase64 != null && bodyBase64.length() > MAX_REQUEST_BASE64_CHARS) {
+                    deliver(web, requestId, errorResponse(413, "ImageGen 요청 본문이 너무 큽니다."));
+                    return;
+                }
                 byte[] requestBody = bodyBase64 == null || bodyBase64.isEmpty()
                         ? new byte[0] : Base64.decode(bodyBase64, Base64.DEFAULT);
                 if (requestBody.length > MAX_REQUEST_BYTES) {

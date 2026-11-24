@@ -4,6 +4,7 @@
   if (!window.WMLHost || typeof window.WMLHost.imageGenProxyFetch !== "function") return;
   window.__waywardImageGenProxyInstalled = true;
 
+  const nativeCapability = "__WAYWARD_IMAGEGEN_CAPABILITY__";
   const nativeFetch = window.fetch.bind(window);
   const pending = new Map();
 
@@ -78,6 +79,12 @@
     if (!localImageGen) return nativeFetch(input, init);
 
     return request.arrayBuffer().then(bodyBuffer => new Promise((resolve, reject) => {
+      if (bodyBuffer.byteLength > 8 * 1024 * 1024) {
+        resolve(new Response(JSON.stringify({ error: "ImageGen 요청 본문이 너무 큽니다." }), {
+          status: 413, headers: { "Content-Type": "application/json; charset=utf-8" }
+        }));
+        return;
+      }
       const id = (window.crypto && typeof window.crypto.randomUUID === "function")
         ? window.crypto.randomUUID()
         : "wimg-" + Date.now().toString(36) + "-" + Math.random().toString(36).slice(2);
@@ -101,7 +108,8 @@
           request.method,
           url.pathname + url.search,
           JSON.stringify(headers),
-          bytesToBase64(bodyBuffer)
+          bytesToBase64(bodyBuffer),
+          nativeCapability
         );
         report("launcher_imagegen_request_dispatched", diagnostic);
       } catch (error) {

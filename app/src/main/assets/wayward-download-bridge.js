@@ -1,6 +1,7 @@
 (() => {
   "use strict";
   if (window.__waywardBlobDownloadBridgeInstalled) return;
+  const nativeCapability = "__WAYWARD_DOWNLOAD_CAPABILITY__";
   const host = window.WMLHost;
   if (!host || typeof host.beginBlobDownload !== "function" ||
       typeof host.appendBlobDownloadChunk !== "function" ||
@@ -98,23 +99,23 @@
         blob = await response.blob();
       }
       const mimeType = blob.type || fallbackMime(filename);
-      const accepted = host.beginBlobDownload(requestId, filename, mimeType, blob.size);
+      const accepted = host.beginBlobDownload(requestId, filename, mimeType, blob.size, nativeCapability);
       if (accepted !== true) throw new Error("Native save request was rejected.");
       const chunkSize = 256 * 1024;
       for (let offset = 0; offset < blob.size; offset += chunkSize) {
         const bytes = new Uint8Array(await blob.slice(offset, offset + chunkSize).arrayBuffer());
-        if (host.appendBlobDownloadChunk(requestId, base64(bytes)) !== true) {
+        if (host.appendBlobDownloadChunk(requestId, base64(bytes), nativeCapability) !== true) {
           throw new Error("Native save stream rejected a data chunk.");
         }
       }
-      if (host.finishBlobDownload(requestId) !== true) {
+      if (host.finishBlobDownload(requestId, nativeCapability) !== true) {
         throw new Error("Native save stream could not be finalized.");
       }
       diagnose("blob_download_native_request_sent", requestId, {
         filename, mimeType, byteLength: blob.size, chunkSize
       });
     } catch (error) {
-      try { host.abortBlobDownload(requestId); } catch (_) {}
+      try { host.abortBlobDownload(requestId, nativeCapability); } catch (_) {}
       window.__waywardBlobDownloadResult(requestId, false);
       diagnose("blob_download_bridge_failed", requestId, {
         filename, errorName: error && error.name || "Error",
