@@ -113,12 +113,18 @@ assert.match(main.slice(webStart, webEnd), /installImageGenDocumentStartScript\(
 
 // Activity result request codes must be globally unique. A collision caused the
 // WebView ZIP/file picker result (4103) to be consumed by Google auth first.
-const mainRequestCodeNames = ['PICK_TREE', 'PICK_MOD_ZIP', 'REQUEST_GOOGLE_AUTH', 'REQUEST_NAI_SETTINGS'];
+const mainRequestCodeNames = ['PICK_TREE', 'PICK_MOD_ZIP', 'REQUEST_NAI_SETTINGS'];
 const mainRequestCodes = mainRequestCodeNames.map((name) => {
   const match = main.match(new RegExp(`\\b${name}\\s*=\\s*(\\d+)`));
   assert(match, `MainActivity request code ${name} must exist`);
   return Number(match[1]);
 });
+assert.match(main, /REQUEST_GOOGLE_AUTH_MIN\s*=\s*60000,\s*REQUEST_GOOGLE_AUTH_MAX\s*=\s*65534/,
+  'Google auth must use a dedicated high request-code range');
+assert.match(main, /private synchronized int reserveGoogleAuthRequestCode\(String nonce\)/,
+  'Google auth request codes must be allocated per request');
+assert.match(main, /int requestCode=nextGoogleAuthRequestCode\+\+/,
+  'Google auth request codes must never be reused during the Activity lifetime');
 const chooserRequestMatch = webFileChooser.match(/static final int REQUEST_CODE\s*=\s*(\d+)/);
 assert(chooserRequestMatch, 'WebView file chooser request code must exist');
 const allRequestCodes = [...mainRequestCodes, Number(chooserRequestMatch[1])];
