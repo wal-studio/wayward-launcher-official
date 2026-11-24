@@ -1234,6 +1234,12 @@ public final class MainActivity extends Activity {
 
     private void ensureImageGenServer(SafTree sessionTree, Runnable afterReady) {
         if (afterReady != null) imageGenReadyCallbacks.add(afterReady);
+        if (!IMAGE_MODE_GENERATION.equals(currentImageMode())) {
+            imageGenSessionMessage = "런처에서 이미지 생성 모드를 선택하지 않아 서버 자동 시작을 건너뛰었습니다.";
+            refreshImageGenStatus();
+            finishImageGenCallbacks();
+            return;
+        }
         if (sessionTree == null) {
             imageGenSessionMessage = "현재 게임 세션의 폴더를 확인할 수 없어 이미지 서버 자동 시작을 건너뛰었습니다.";
             finishImageGenCallbacks();
