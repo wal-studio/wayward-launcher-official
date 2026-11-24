@@ -28,7 +28,7 @@ final class ImageGenBackendInstaller {
 
     private ImageGenBackendInstaller() {}
 
-    static File install(Context context, File destination) throws Exception {
+    static synchronized File install(Context context, File destination) throws Exception {
         String stage = "validate_arguments";
         try {
             if (context == null || destination == null) throw new IllegalArgumentException("ImageGen 설치 경로가 없습니다.");
