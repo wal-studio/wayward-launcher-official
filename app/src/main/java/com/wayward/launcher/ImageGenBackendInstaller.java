@@ -120,7 +120,9 @@ final class ImageGenBackendInstaller {
                 details.put("exceptionMessage", safeExceptionMessage(error));
             } catch (Exception ignored) {}
             DiagnosticsLogger.error(context, "imagegen_backend_installer",
-                    "imagegen_backend_install_failed", error, details);
+                    "imagegen_backend_install_failed", error);
+            DiagnosticsLogger.event(context, "ERROR", "imagegen_backend_installer",
+                    "imagegen_backend_install_failure_details", details);
             if (error instanceof Exception) throw (Exception) error;
             throw (Error) error;
         }
