@@ -680,7 +680,7 @@ public final class MainActivity extends Activity {
     }
 
     private void launchProfileSession(String id){
-        Intent i=new Intent(this,MainActivity.class);i.setData(Uri.parse("wayward://session/"+Uri.encode(id)));
+        Intent i=new Intent(this,GameSessionActivity.class);i.setData(Uri.parse("wayward://session/"+Uri.encode(id)));
         i.addFlags(Intent.FLAG_ACTIVITY_NEW_DOCUMENT);startActivity(i);
     }
 
