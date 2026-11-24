@@ -84,9 +84,9 @@ assert.doesNotMatch(application, /DiagnosticsUploader\.uploadPending/, 'automati
 assert.match(manifest, /ImageGenService/, 'the user-started image-generation service must be registered');
 assert.match(manifest, /NovelAiSettingsActivity/, 'the NAI credential screen must be registered');
 assert.doesNotMatch(manifest, /ImageProviderActivity/, 'the legacy generic Cloudflare provider editor must stay out of the official UI');
-assert.match(main, /startGoogleDriveAuth\(String nonce\)/, 'native Drive authorization bridge must exist');
-assert.match(main, /takePendingStateForNonce\(String nonce\)/, 'nonce-scoped one-time result handoff must exist');
-assert.match(main, /clearGoogleAccessToken\(String token\)/, 'invalid native Drive tokens must be clearable');
+assert.match(main, /startGoogleDriveAuth\(String nonce,String capability\)/, 'native Drive authorization bridge must require its per-WebView capability');
+assert.match(main, /takePendingStateForNonce\(String nonce,String capability\)/, 'nonce-scoped one-time result handoff must require its per-WebView capability');
+assert.match(main, /clearGoogleAccessToken\(String token,String capability\)/, 'invalid native Drive tokens must be clearable through the capability-protected bridge');
 assert.match(main, /startImageServerAfterNaiSettings=true;\s*openNovelAiSettings\(\);\s*return;/,
   'starting generation without a token must open NAI settings and remember the requested start');
 const naiResultStart = main.indexOf('if(req==REQUEST_NAI_SETTINGS)');
