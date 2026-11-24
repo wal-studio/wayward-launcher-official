@@ -2144,17 +2144,26 @@ public class MainActivity extends Activity {
         }
         @JavascriptInterface public String imageGenRuntimeStatus(){
             ImageGenStatusStore.State state=ImageGenStatusStore.read(getFilesDir());
+            boolean modeEnabled=imageGenerationRoutingActive();
+            boolean tokenAvailable=false;
+            try{
+                String token=NovelAiTokenStore.readToken(MainActivity.this);
+                tokenAvailable=token!=null&&!token.trim().isEmpty();
+            }catch(Exception ignored){}
+            boolean usable=modeEnabled&&tokenAvailable;
             try{
                 JSONObject value=new JSONObject();
-                value.put("available",state.isAvailable());
-                value.put("starting",state.isStarting());
-                value.put("ready",state.isReady());
+                value.put("available",usable&&state.isAvailable());
+                value.put("starting",usable&&state.isStarting());
+                value.put("ready",usable&&state.isReady());
+                value.put("modeEnabled",modeEnabled);
+                value.put("tokenAvailable",tokenAvailable);
                 value.put("backendVersion",state.backendVersion);
                 String[] parts=state.backendVersion.split(":");
                 value.put("engine",parts.length>=3?parts[2]:"unknown");
-                value.put("message",state.message);
+                value.put("message",!modeEnabled?"이미지팩 전용 모드입니다.":!tokenAvailable?"NovelAI 토큰을 등록해야 합니다.":state.message);
                 return value.toString();
-            }catch(Exception ignored){return "{\"available\":false,\"starting\":false,\"ready\":false,\"backendVersion\":\"\",\"engine\":\"unknown\"}";}
+            }catch(Exception ignored){return "{\"available\":false,\"starting\":false,\"ready\":false,\"modeEnabled\":false,\"tokenAvailable\":false,\"backendVersion\":\"\",\"engine\":\"unknown\"}";}
         }
         @JavascriptInterface public void logImageProviderDiagnostic(String event,String detailsJson){
             ImagePipelineDiagnostics.recordJson(MainActivity.this,event,detailsJson);
