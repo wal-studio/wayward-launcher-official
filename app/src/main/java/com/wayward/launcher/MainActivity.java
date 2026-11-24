@@ -2130,6 +2130,16 @@ public class MainActivity extends Activity {
                 ImageGenProxy.reject(web,requestId,403,"런처에서 이미지 생성 모드를 선택해야 합니다.");
                 return;
             }
+            try{
+                String token=NovelAiTokenStore.readToken(MainActivity.this);
+                if(token==null||token.trim().isEmpty()){
+                    ImageGenProxy.reject(web,requestId,401,"런처에 NovelAI 토큰을 먼저 등록해야 합니다.");
+                    return;
+                }
+            }catch(Exception error){
+                ImageGenProxy.reject(web,requestId,503,"NovelAI 보안 저장소를 읽지 못했습니다.");
+                return;
+            }
             ImageGenProxy.dispatch(web,requestId,method,path,headersJson,bodyBase64);
         }
         @JavascriptInterface public String imageGenRuntimeStatus(){
