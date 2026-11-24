@@ -14,6 +14,7 @@
     '/cloud/auth-061.html',
     '/cloud/auth.html'
   ]);
+  const nativeCapability = "__WAYWARD_GOOGLE_AUTH_CAPABILITY__";
   const DRIVE_SESSION_TOKEN_KEY = 'wml-google-drive-session-token-v1';
   let lastGoogleDriveAccessToken = '';
 
@@ -44,7 +45,7 @@
       const host = window.WMLHost;
       if (!token || !host || typeof host.clearGoogleAccessToken !== 'function') return;
 
-      host.clearGoogleAccessToken(token);
+      host.clearGoogleAccessToken(token, nativeCapability);
       lastGoogleDriveAccessToken = '';
     } catch (_) {}
   }
@@ -69,7 +70,7 @@
           );
           const authorization = requestHeaders.get('Authorization') || '';
           const match = /^Bearer\s+(.+)$/i.exec(authorization);
-          if (match) window.WMLHost.clearGoogleAccessToken(match[1]);
+          if (match) window.WMLHost.clearGoogleAccessToken(match[1], nativeCapability);
         }
       } catch (_) {}
       return response;
@@ -155,7 +156,7 @@
       if (finished) return;
       ticks += 1;
       let raw = '';
-      try { raw = host.takePendingStateForNonce(nonce) || ''; } catch (_) {}
+      try { raw = host.takePendingStateForNonce(nonce, nativeCapability) || ''; } catch (_) {}
 
       if (raw) {
         let data;
@@ -176,7 +177,7 @@
         }
         deliver(data);
       } else if (ticks >= 720) {
-        try { if (typeof host.cancelGoogleDriveAuth === 'function') host.cancelGoogleDriveAuth(nonce); } catch (_) {}
+        try { if (typeof host.cancelGoogleDriveAuth === 'function') host.cancelGoogleDriveAuth(nonce, nativeCapability); } catch (_) {}
         deliver({
           type: 'wayward-cloud-auth-error',
           nonce,
@@ -203,10 +204,10 @@
     try {
       if (hasPolicyStart) {
         // New launchers receive both the normal and forced account policies.
-        host.startGoogleDriveAuthWithPolicy(nonce, forceSelectAccount);
+        host.startGoogleDriveAuthWithPolicy(nonce, forceSelectAccount, nativeCapability);
       } else if (!forceSelectAccount && hasLegacyStart) {
         // Older launchers remain compatible for ordinary remembered-account auth.
-        host.startGoogleDriveAuth(nonce);
+        host.startGoogleDriveAuth(nonce, nativeCapability);
       } else {
         // Never silently ignore a requested account picker on an old launcher.
         deliverStartError('현재 Android 런처는 Google 계정 선택 API를 제공하지 않습니다. 런처를 업데이트한 뒤 다시 시도하세요.');

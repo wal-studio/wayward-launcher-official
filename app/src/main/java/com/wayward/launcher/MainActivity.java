@@ -120,6 +120,7 @@ public class MainActivity extends Activity {
     private String imagePackFolderPickerScript;
     private String imagePackFolderPickerOrigin = "";
     private String imagePackFolderPickerCapability = "";
+    private String googleAuthBridgeCapability = "";
     private WebFileChooser webFileChooser;
 
     @Override public void onCreate(Bundle b){
@@ -1099,6 +1100,7 @@ public class MainActivity extends Activity {
     }
 
     private void installGoogleAuthBridgeScript(String gameOrigin){
+        googleAuthBridgeCapability="";
         if(web==null||gameOrigin==null||gameOrigin.isEmpty())return;
         if(!WebViewFeature.isFeatureSupported(WebViewFeature.DOCUMENT_START_SCRIPT)){
             DiagnosticsLogger.event(this,"WARN","oauth","document_start_script_unavailable",null);
@@ -1107,11 +1109,19 @@ public class MainActivity extends Activity {
         try(InputStream input=getAssets().open("wayward-google-auth-bridge.js");
             ByteArrayOutputStream output=new ByteArrayOutputStream()){
             byte[] buffer=new byte[4096];int count;
-            while((count=input.read(buffer))!=-1)output.write(buffer,0,count);
+            while((count=input.read(buffer))!=-1){
+                output.write(buffer,0,count);
+                if(output.size()>64*1024)throw new IllegalStateException("Google auth bridge script is too large.");
+            }
+            googleAuthBridgeCapability=ImagePackFolderPickerScript.createCapability();
             String script=new String(output.toByteArray(),StandardCharsets.UTF_8);
+            String placeholder="__WAYWARD_GOOGLE_AUTH_CAPABILITY__";
+            if(!script.contains(placeholder))throw new IllegalStateException("Google auth bridge capability placeholder is missing.");
+            script=script.replace(placeholder,googleAuthBridgeCapability);
             WebViewCompat.addDocumentStartJavaScript(web,script,Collections.singleton(gameOrigin));
             DiagnosticsLogger.event(this,"INFO","oauth","native_google_auth_bridge_installed",null);
         }catch(Throwable error){
+            googleAuthBridgeCapability="";
             DiagnosticsLogger.error(this,"oauth","native_google_auth_bridge_install_failed",error);
         }
     }
@@ -1842,7 +1852,7 @@ public class MainActivity extends Activity {
 
     private void showHomePanel(){runOnUiThread(()->{if(web!=null)web.setVisibility(View.GONE);if(home!=null)home.setVisibility(View.VISIBLE);refreshStatus();refreshImageGenStatus();renderImageModePanel();});}
         if(imagePackDirectoryAccess!=null){imagePackDirectoryAccess.cancelPending();imagePackDirectoryAccess.closeAllFileStreams();imagePackDirectoryAccess=null;}
-        imagePackFolderPickerCapability="";imagePackFolderPickerScript=null;imagePackFolderPickerOrigin="";
+        imagePackFolderPickerCapability="";imagePackFolderPickerScript=null;imagePackFolderPickerOrigin="";googleAuthBridgeCapability="";
     private void destroyWeb(){if(webFileChooser!=null){webFileChooser.cancelPending();webFileChooser=null;}if(web==null)return;web.removeJavascriptInterface("WMLHost");root.removeView(web);web.stopLoading();web.loadUrl("about:blank");web.destroy();web=null;}
     @Override public void onBackPressed(){
         if(web!=null&&web.getVisibility()==View.VISIBLE){
@@ -2007,19 +2017,25 @@ public class MainActivity extends Activity {
             catch(Exception e){try{JSONObject r=new JSONObject();r.put("ok",false);r.put("ids",new JSONArray());return r.toString();}catch(Exception ignored){return "{}";}}
         }
         @JavascriptInterface public void menu(){showHomePanel();}
-        @JavascriptInterface public void startGoogleDriveAuth(String nonce){
-            startGoogleDriveAuthWithPolicy(nonce,false);
+        private boolean hasGoogleAuthBridgeCapability(String supplied){
+            return web!=null
+                    &&ImagePackFolderPickerScript.matchesCapability(googleAuthBridgeCapability,supplied)
+                    &&ImagePackFolderPickerScript.isSameOrigin(web.getUrl(),sessionOrigin(activeProfileId));
         }
-        @JavascriptInterface public void startGoogleDriveAuthWithPolicy(String nonce,boolean forceSelectAccount){
-            if(nonce==null||!nonce.matches("[a-f0-9]{48}"))return;
+        @JavascriptInterface public void startGoogleDriveAuth(String nonce,String capability){
+            if(!hasGoogleAuthBridgeCapability(capability)||nonce==null||!nonce.matches("[a-f0-9]{48}"))return;
+            runOnUiThread(()->beginGoogleDriveAuth(nonce,false));
+        }
+        @JavascriptInterface public void startGoogleDriveAuthWithPolicy(String nonce,boolean forceSelectAccount,String capability){
+            if(!hasGoogleAuthBridgeCapability(capability)||nonce==null||!nonce.matches("[a-f0-9]{48}"))return;
             runOnUiThread(()->beginGoogleDriveAuth(nonce,forceSelectAccount));
         }
-        @JavascriptInterface public void cancelGoogleDriveAuth(String nonce){
-            if(nonce==null||!nonce.matches("[a-f0-9]{48}"))return;
+        @JavascriptInterface public void cancelGoogleDriveAuth(String nonce,String capability){
+            if(!hasGoogleAuthBridgeCapability(capability)||nonce==null||!nonce.matches("[a-f0-9]{48}"))return;
             runOnUiThread(()->clearGoogleDriveAuthRequest(nonce));
         }
-        @JavascriptInterface public void revokeGoogleDriveAccess(String nonce){
-            if(nonce==null||!nonce.matches("[a-f0-9]{48}"))return;
+        @JavascriptInterface public void revokeGoogleDriveAccess(String nonce,String capability){
+            if(!hasGoogleAuthBridgeCapability(capability)||nonce==null||!nonce.matches("[a-f0-9]{48}"))return;
             runOnUiThread(()->{
                 try{
                     RevokeAccessRequest request=RevokeAccessRequest.builder()
@@ -2034,13 +2050,13 @@ public class MainActivity extends Activity {
                 }
             });
         }
-        @JavascriptInterface public String takePendingStateForNonce(String nonce){
-            if(nonce==null||!nonce.matches("[a-f0-9]{48}"))return "";
+        @JavascriptInterface public String takePendingStateForNonce(String nonce,String capability){
+            if(!hasGoogleAuthBridgeCapability(capability)||nonce==null||!nonce.matches("[a-f0-9]{48}"))return "";
             String result=PENDING_GOOGLE_AUTH_RESULTS.remove(nonce);
             return result==null?"":result;
         }
-        @JavascriptInterface public void clearGoogleAccessToken(String token){
-            if(token==null||token.isEmpty()||token.length()>4096)return;
+        @JavascriptInterface public void clearGoogleAccessToken(String token,String capability){
+            if(!hasGoogleAuthBridgeCapability(capability)||token==null||token.isEmpty()||token.length()>4096)return;
             runOnUiThread(()->{
                 try{
                     Identity.getAuthorizationClient(MainActivity.this)
