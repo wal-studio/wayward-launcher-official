@@ -1562,11 +1562,8 @@ public class MainActivity extends Activity {
                         }
                         return folderHandler.serveGamePath(path.substring(6));
                     }
-                    if(path != null && path.startsWith("/images/__wayward_generated__/")) {
-                        if(IMAGE_MODE_REMOTE_PC.equals(currentImageMode()))
-                            return RemoteGameResourceBridge.serve(MainActivity.this,u.getEncodedPath(),r.getRequestHeaders(),imageDiagnostics);
-                        return serveGeneratedImageRequest(path, imageDiagnostics);
-                    }
+                    if(path != null && path.startsWith("/images/__wayward_generated__/"))
+                        return serveImageRequestByMode(folderHandler,path,u.getEncodedPath(),r.getRequestHeaders(),imageDiagnostics);
                     if(FolderHandler.isImageRequestPath(path))return serveImageRequestByMode(folderHandler,path,u.getEncodedPath(),r.getRequestHeaders(),imageDiagnostics);
                 }
                 String requestedPath=u.getPath();
@@ -1931,10 +1928,20 @@ private static String defaultCharacterCdnPath(Uri uri){
         if(IMAGE_MODE_REMOTE_PC.equals(currentImageMode())){
             return RemoteGameResourceBridge.serve(this,encodedPath,requestHeaders,samples);
         }
+        final String generatedPrefix="/images/__wayward_generated__/";
+        if(path==null||!path.startsWith("/images/"))return null;
+        boolean alreadyGenerated=path.startsWith(generatedPrefix);
+        String originalPath=alreadyGenerated
+                ? "/images/"+path.substring(generatedPrefix.length()) : path;
         if(imageGenerationRoutingActive()){
-            return serveGeneratedImageRequest("/images/__wayward_generated__/"+path.substring(8),samples);
+            String generatedPath=alreadyGenerated?path:generatedPrefix+path.substring(8);
+            WebResourceResponse generated=serveGeneratedImageRequest(generatedPath,samples);
+            if(generated!=null){
+                int status=generated.getStatusCode();
+                if(status==200||status==400||status==403)return generated;
+            }
         }
-        return serveImageRequest(handler,path,samples);
+        return serveImageRequest(handler,originalPath,samples);
     }
 
     private WebResourceResponse serveImageRequest(FolderHandler handler,String path,
