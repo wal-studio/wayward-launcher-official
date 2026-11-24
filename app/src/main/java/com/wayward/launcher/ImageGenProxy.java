@@ -23,6 +23,7 @@ final class ImageGenProxy {
     private static final int CONNECT_TIMEOUT_MS = 10000;
     private static final int READ_TIMEOUT_MS = 15 * 60 * 1000;
     private static final int MAX_REQUEST_BYTES = 8 * 1024 * 1024;
+    private static final int MAX_REQUEST_BASE64_CHARS = ((MAX_REQUEST_BYTES + 2) / 3) * 4 + 16;
     private static final int MAX_RESPONSE_BYTES = 64 * 1024 * 1024;
 
     private ImageGenProxy() {}
@@ -52,8 +53,14 @@ final class ImageGenProxy {
         final long startedAt=System.currentTimeMillis();
         new Thread(() -> {
             HttpURLConnection connection = null;
+            byte[] requestBody = null;
+            byte[] responseBody = null;
             try {
-                byte[] requestBody = bodyBase64 == null || bodyBase64.isEmpty()
+                if (bodyBase64 != null && bodyBase64.length() > MAX_REQUEST_BASE64_CHARS) {
+                    deliver(web, requestId, errorResponse(413, "ImageGen 요청 본문이 너무 큽니다."));
+                    return;
+                }
+                requestBody = bodyBase64 == null || bodyBase64.isEmpty()
                         ? new byte[0] : Base64.decode(bodyBase64, Base64.DEFAULT);
                 if (requestBody.length > MAX_REQUEST_BYTES) {
                     deliver(web, requestId, errorResponse(413, "ImageGen 요청 본문이 너무 큽니다."));
@@ -118,7 +125,7 @@ final class ImageGenProxy {
                 try{diagnostic.put("method",safeMethod);diagnostic.put("path",Uri.parse(safePath).getPath());diagnostic.put("status",status);diagnostic.put("elapsedMs",System.currentTimeMillis()-startedAt);}catch(Exception ignored){}
                 DiagnosticsLogger.event(appContext,status>=400?"WARN":"INFO","imagegen_proxy","api_response",diagnostic);
                 InputStream responseStream = status >= 400 ? connection.getErrorStream() : connection.getInputStream();
-                byte[] responseBody = responseStream == null ? new byte[0]
+                responseBody = responseStream == null ? new byte[0]
                         : readLimited(responseStream, MAX_RESPONSE_BYTES);
                 if (responseStream != null) responseStream.close();
 
@@ -127,6 +134,8 @@ final class ImageGenProxy {
                 payload.put("statusText", safeStatus(connection.getResponseMessage()));
                 payload.put("headers", responseHeaders(connection.getHeaderFields()));
                 payload.put("bodyBase64", Base64.encodeToString(responseBody, Base64.NO_WRAP));
+                java.util.Arrays.fill(responseBody, (byte) 0);
+                responseBody = null;
                 deliver(web, requestId, payload.toString());
             } catch (Exception e) {
                 JSONObject diagnostic=new JSONObject();
@@ -135,6 +144,8 @@ final class ImageGenProxy {
                 deliver(web, requestId, errorResponse(502, e.getMessage() == null
                         ? "ImageGen 서버에 연결하지 못했습니다." : e.getMessage()));
             } finally {
+                if (requestBody != null) java.util.Arrays.fill(requestBody, (byte) 0);
+                if (responseBody != null) java.util.Arrays.fill(responseBody, (byte) 0);
                 if (connection != null) connection.disconnect();
             }
         }, "wayward-imagegen-proxy").start();
