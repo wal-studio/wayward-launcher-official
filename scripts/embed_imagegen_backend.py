@@ -99,6 +99,15 @@ def extract(archive: Path, output: Path) -> None:
                         destination.write(chunk)
                 if written != entry.file_size:
                     fail("backend entry size mismatch: " + relative)
+                # Normalize trailing blank lines in the embedded README so generated
+                # assets pass the repository's whitespace-diff validation.
+                if relative == "wayward-imagegen/README.md":
+                    readme = target.read_text(encoding="utf-8")
+                    normalized_readme = readme.rstrip("\\r\\n") + "\\n"
+                    if normalized_readme != readme:
+                        target.write_text(normalized_readme, encoding="utf-8", newline="")
+                        written = target.stat().st_size
+                        digest = hashlib.sha256(normalized_readme.encode("utf-8"))
                 files[relative] = digest.hexdigest()
                 if len(files) > MAX_FILES:
                     fail("backend file count exceeds limit")
