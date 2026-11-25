@@ -370,3 +370,21 @@ Smoke test에는 mock ComfyUI를 이용한 게임 요청 → prompt status → �
 ### 개발판 정리/삭제 승인 규칙 — 필수
 
 모바일 개발판 `work/official-dev-port`에서 수정 후 빌드·테스트·실기기 원격 생성 검증이 모두 정상 통과하더라도 해당 개발 브랜치나 기존 작업물을 자동 삭제하지 않는다. 완료 증거와 삭제 대상(브랜치/파일/아티팩트)을 구체적으로 제시하고 **사용자에게 삭제해도 되는지 명시적인 승인을 먼저 받아야 한다.** 승인 전에는 브랜치·커밋·테스트 산출물 및 기존 작업물을 보존한다.
+
+
+- `3c7ac48075d637f41475a83429910560fba8a68b` — Anima workspace settings lifetime/scope correction required by the new workflow argument mapping.
+- PC branch HEAD after these changes: `3c7ac48075d637f41475a83429910560fba8a68b`.
+
+### 모바일 문서만 따라 수정하면 안전한가?
+
+아직은 **그렇다고 보증할 수 없다.** 이 문서는 수정 범위와 계약을 고정하는 핸드오프 명세이지, 모바일 코드의 자동 호환성을 보장하는 실행 가능한 구현물이 아니다. 특히 PC 측 Image Studio 설정 API 전체(GET/PUT, capabilities, resources, prompt-batch-support, folder picker, character discovery)가 아직 브리지에 구현·검증되지 않았다. 해당 API가 PC에 준비되기 전에 모바일 allowlist만 열면 요청은 PC에서 404가 되거나 불완전한 응답을 받는다.
+
+따라서 모바일 구현은 다음 순서를 지켜야 한다.
+
+1. PC 측 모든 API route와 응답 계약을 먼저 구현하고 PC 빌드·테스트를 통과시킨다.
+2. PC API 계약을 고정한 뒤 최신 `work/official-dev-port` HEAD에서 모바일 allowlist/proxy를 같은 계약으로 이식한다.
+3. 모바일 테스트에서 경로·메서드·본문·응답 status/header/body의 왕복 동일성을 확인한다.
+4. 실제 Android 기기에서 페어링된 PC의 ComfyUI를 통해 SDXL과 Anima를 각각 생성하고, 취소·상태·배치·초상화 출력까지 검증한다.
+5. 위 검증이 모두 끝나야 모바일 변경을 정상 작동으로 판정한다. 그 후에도 개발 브랜치 삭제는 자동 수행하지 않고 사용자에게 명시적으로 승인받는다.
+
+즉, 문서대로 모바일만 먼저 수정하는 것으로는 부족하다. **PC API 구현 완료 + 모바일 원격 전달 호환 + 실제 기기 end-to-end 검증**이 모두 충족되어야 모바일 쪽에 남은 위험이 없다고 판단할 수 있다. 또한 실제 검증 전에는 잔여 위험이 없다고 단정하지 않는다.
