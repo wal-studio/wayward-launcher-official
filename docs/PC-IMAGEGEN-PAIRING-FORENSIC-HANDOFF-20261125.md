@@ -22,17 +22,19 @@
 기준 브랜치/커밋: `work/restore-pc-deliverable-20261125` / `eb91f12b55d239847627cf9e49b58184b210dd7e`
 
 변경 커밋:
-- `197a2fadaa320248d910ef55a848580c61bafb6f` — ImageGen Provider readiness 상태 반영
+- `197a2fadaa320248d910ef55a848580c61bafb6f` — ImageGen Provider readiness 상태 반영 (초기 커밋; 후속 보완 포함)
 - `22b0cfb4e9b19b8c3f14a76605e4d37813fa5767` — Pairing 네트워크 차단 진단 로그
+- `c370fd20bdcf29f490a59858e52aca40cc1813e7` — Provider 준비 대기 시간 5분 보존
 
 ### 1. `ManagedServiceSupervisor.cs`
 
 기존 동작은 ImageGen 0.8.4의 health 응답에서 `ServerRunning=true`만 확인하면 Provider가 준비되지 않았어도 Manager UI 상태를 `Running`으로 표시했다. health 평가 함수는 이미 `ProviderReady`를 계산하고 있었지만 실제 서비스 상태 결정에서 사용하지 않았다.
 
 최소 변경으로 Manager 소유 프로세스와 외부 소유 프로세스 모두 다음과 같이 표시하도록 수정했다.
-- 서버와 Provider가 모두 준비됨: 기존 `Running` / `RunningExternal`
-- 서버는 살아 있지만 Provider가 준비되지 않음: `Failed` 상태와 원인 메시지 표시
-- 실패 상태여도 프로세스 소유권은 그대로 보존한다.
+- 서버와 Provider가 모두 준비됨: `Running` / `RunningExternal`
+- Manager 소유 프로세스가 살아 있지만 Provider가 아직 준비되지 않음: 5분 startup deadline까지 `Starting`으로 대기
+- 5분이 지나도 Provider가 준비되지 않음: `Failed` 및 원인 메시지 표시
+- Provider 준비 실패 상태에서도 프로세스 소유권은 그대로 보존한다.
 - 자동 종료·재시작은 하지 않는다. 특히 외부 소유 프로세스는 기존처럼 종료하거나 재시작하지 않는다.
 
 이 변경은 8189 HTTP 500의 근본 원인을 해결했다고 주장하는 수정이 아니다. 서버 생존과 실제 생성 가능 상태를 구분해 기존의 false-green 상태 표시를 바로잡는 변경이다.
@@ -166,7 +168,7 @@ QR nonce, 서명, bearer token, 개인키, 공개키 증명 payload는 기록하
 
 ## 이번 작업의 검증 상태
 
-- PC 코드 변경: 적용됨 (위 두 커밋).
+- PC 코드 변경: 적용됨 (위 세 커밋).
 - Android 코드 변경: 없음. 권장 diff만 이 문서에 기록.
 - PC 빌드 및 자동화 테스트: 이 작업 단계에서는 실행 결과를 확보하지 못했으므로 **NOT RUN**.
 - 실제 ImageGen prompt 생성: **NOT RUN**.
