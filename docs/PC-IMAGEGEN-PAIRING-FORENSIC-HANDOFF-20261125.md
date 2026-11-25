@@ -24,29 +24,42 @@
 변경 커밋:
 - `197a2fadaa320248d910ef55a848580c61bafb6f` — ImageGen Provider readiness 상태 반영 (초기 커밋; 후속 보완 포함)
 - `22b0cfb4e9b19b8c3f14a76605e4d37813fa5767` — Pairing 네트워크 차단 진단 로그
-- `c370fd20bdcf29f490a59858e52aca40cc1813e7` — Provider 준비 대기 시간 5분 보존
+- `c370fd20bdcf29f490a59858e52aca40cc1813e7` — 기존 Provider 준비 대기 시간 5분 보존
+- `8f11b338a7d3e8d85cbbc982e6c86e53528d7bf4` — PC 게임용 8189 직접 ComfyUI 브리지 구현
+- `746cca4ec77805e147102df5d3affb2b19556d87` — 직접 브리지에도 ComfyUI Provider 준비 대기 5분 적용
+- `03659c64aba62d2f14e1e3a900b4915761dedbd1` — 구형 Bun ImageGen 버전 상수 제거 (최신 PC 브랜치 HEAD)
 
 ### 1. `ManagedServiceSupervisor.cs`
 
-기존 동작은 ImageGen 0.8.4의 health 응답에서 `ServerRunning=true`만 확인하면 Provider가 준비되지 않았어도 Manager UI 상태를 `Running`으로 표시했다. health 평가 함수는 이미 `ProviderReady`를 계산하고 있었지만 실제 서비스 상태 결정에서 사용하지 않았다.
+PC 게임의 8189 이미지 API는 더 이상 별도 Bun/ImageGen 프로세스를 실행하지 않는다. Manager가 실행하는 Remote Host가 loopback 8189 API를 소유하고, 그 API가 기존 `LegacyGameImageApi`와 `ComfyUiGateway`를 통해 ComfyUI 8188에 직접 요청한다.
 
-최소 변경으로 Manager 소유 프로세스와 외부 소유 프로세스 모두 다음과 같이 표시하도록 수정했다.
-- 서버와 Provider가 모두 준비됨: `Running` / `RunningExternal`
-- Manager 소유 프로세스가 살아 있지만 Provider가 아직 준비되지 않음: 5분 startup deadline까지 `Starting`으로 대기
-- 5분이 지나도 Provider가 준비되지 않음: `Failed` 및 원인 메시지 표시
-- Provider 준비 실패 상태에서도 프로세스 소유권은 그대로 보존한다.
-- 자동 종료·재시작은 하지 않는다. 특히 외부 소유 프로세스는 기존처럼 종료하거나 재시작하지 않는다.
-
-이 변경은 8189 HTTP 500의 근본 원인을 해결했다고 주장하는 수정이 아니다. 서버 생존과 실제 생성 가능 상태를 구분해 기존의 false-green 상태 표시를 바로잡는 변경이다.
+- Remote Host 실행 인자에 `Host:EnableGameImageApi=true`를 추가한다.
+- `StartImageGenAsync`는 Bun 서버를 새로 실행하지 않고 Host가 소유한 `ComfyUI Game API`의 health/readiness를 확인한다.
+- 기존 Manager 소유 Bun/ImageGen 프로세스가 남아 있는 경우, setup/reuse 전환 과정에서 소유권을 확인한 뒤 안전하게 종료하고 Host를 재시작한다.
+- 외부/소유권 불명 프로세스는 종료하지 않는다. 8189 포트 충돌이 있으면 원인과 프로세스 정보를 표시하고 전환을 중단한다.
+- Provider 준비 여부는 단순 서버 생존과 분리한다. ComfyUI Manager 소유 프로세스가 시작 중이면 최대 5분 동안 `Starting`으로 대기하고, 제한 시간 후에도 준비되지 않으면 `Failed`로 표시한다. 자동 종료·재시작하지 않고 프로세스 소유권을 보존한다.
+- `StartAllAsync`와 기존 설정 재사용 경로에도 같은 구형 프로세스 정리 및 Host 재시작 절차를 적용한다.
 
 ### 2. `Program.cs`
 
-첫 페어링 등록 및 pairing-manifest 요청이 기존 로컬 사설망 게이트에서 403으로 거절될 때 다음의 비밀정보가 아닌 진단 필드만 서버 로그에 남기도록 했다.
-- 요청 경로
-- 원격 주소
-- 차단 사유
+- Manager가 전달한 `Host:EnableGameImageApi=true` 설정에 따라 Kestrel이 `127.0.0.1:8189` loopback listener를 추가로 연다.
+- 8189 listener의 요청은 `LocalGameImageApiBridge`로 전달한다. LAN 전체에 8189를 노출하지 않는다.
+- 첫 페어링 등록 및 pairing-manifest 요청이 기존 로컬 사설망 게이트에서 거절될 때는 요청 경로, 원격 주소, 거절 사유만 로그에 남긴다.
+- QR nonce, 서명, bearer token, 개인키, 공개키 증명 payload는 기록하지 않는다. 기존 로컬망 제한 정책은 완화하거나 제거하지 않았다.
 
-QR nonce, 서명, bearer token, 개인키, 공개키 증명 payload는 기록하지 않는다. 기존 로컬망 제한 정책은 이번 수정에서 완화하거나 제거하지 않았다.
+### 3. PC 게임 이미지 API — Bun 없이 ComfyUI 직접 사용
+
+새 파일: `src/Wayward.RemoteHost.Server/LocalGameImageApiBridge.cs`
+
+- 기존 게임이 사용하는 `/api/image/health`, `/api/image/generate`, `/api/image/status/{promptId}`, `/api/image/cancel`, `/api/image-hit`, `/api/pack`, batch 경로 및 `/images/*`를 loopback 8189에서 제공한다.
+- 생성 요청은 기존 `LegacyGameImageApi` → `ComfyUiGateway` 경로로 전달되어 ComfyUI 8188에서 실행된다. 별도 Bun/ImageGen 런타임은 생성 경로에 필요하지 않다.
+- 게임 요청의 `workflow=illustrious`에 명시적인 checkpoint나 사용자 workflow가 없으면, 기존 직접 ComfyUI 성공 테스트에서 사용한 `waiIllustriousSDXL_v170.safetensors`를 기본 checkpoint로 선택한다. 명시적인 checkpoint 및 custom workflow는 우선한다. 과거 Anima workspace 설정이 명시적 Illustrious checkpoint를 덮어쓰지 않도록 했다.
+- 생성 완료 파일은 Manager가 승인한 게임 workspace의 `images/__wayward_generated__` 아래에 저장되고, `/images/*`를 통해 게임에 반환된다. workspace root는 Manager 설정에서 선택하며 임의의 폴더를 열지 않는다.
+- 8189는 loopback 요청만 받으며, 브라우저 Origin도 local/file 기반 origin만 허용한다. 로컬 AWebServer에서 쓰는 `0.0.0.0` origin도 지원한다.
+- 기존 `ImageGenGateway` proxy의 8189 대상은 새 Host-owned bridge로 연결된다. Android의 기존 `/v1/game-image-api` 경로는 변경하지 않고 같은 `LegacyGameImageApi`를 계속 사용한다.
+- PC UI의 상태 표기를 `ComfyUI Game API`로 바꾸고, 구형 ImageGen 설정 버튼은 숨겼다.
+
+Smoke test에는 mock ComfyUI를 이용한 게임 요청 → prompt status → 생성 이미지 파일 반환, `/api/pack`, CORS 및 Illustrious checkpoint 선택 검증을 추가했다. 다만 해당 테스트는 아직 실행하지 않았다.
 
 ### 보존한 PC 동작
 
@@ -55,21 +68,22 @@ QR nonce, 서명, bearer token, 개인키, 공개키 증명 payload는 기록하
 - QR nonce의 만료 및 일회성 등록 정책
 - Device 공개키 proof와 PC Manager의 명시적 승인 절차
 - 페어링된 기기 레지스트리 및 명시적 해제 정책
-- ImageGen 8189의 loopback 전용 바인딩
+- PC 게임 API 8189의 loopback 전용 바인딩 (이제 Remote Host 소유의 직접 ComfyUI 브리지)
 - ComfyUI 8188의 기존 프로세스 소유권/종료 정책
-- `ImageGenGateway`, `LegacyGameImageApi`, `ComfyUiGateway`의 별도 요청 경로
+- Android `/v1/game-image-api` 인증/요청 경로와 pairing 계약 (Android 코드 변경 없음)
+- 기존 `LegacyGameImageApi` 및 `ComfyUiGateway` 구현을 재사용하며, PC 게임 요청은 새 8189 브리지로 연결
 
 ## 현재까지 확정된 사실과 미확정 항목
 
-### ImageGen
+### ImageGen / PC 게임 초상화
 
-- 게임 브라우저가 `POST http://127.0.0.1:8189/api/image/generate`로 보낸 두 요청이 HTTP 500 `{"error":"internal error"}`를 반환한 기록이 있다.
-- ComfyUI에 직접 제출한 별도 테스트 workflow는 prompt 완료 및 PNG 출력까지 성공한 이력이 있다. 이것은 ComfyUI 단독 생성 성공이지, ImageGen 8189 경유 성공 증거는 아니다.
-- 과거 `ECONNREFUSED` 기록은 현재 HTTP 500의 확정 원인으로 취급하지 않는다.
-- 현재 PC Manager의 프로세스 실행 경로는 ImageGen stdout/stderr를 영구 수집하지 않는다.
-- 현재 `smoke-imagegen-runtime.ps1`은 격리된 임시 workspace에서 health endpoint만 확인하며 실제 prompt 생성은 명시적으로 테스트하지 않는다.
-
-따라서 HTTP 500의 실제 예외/stack trace, 8189 → 8188 workflow 제출/완료, 최종 이미지 파일 및 응답 반환은 아직 미검증이다. 이번 PC 수정만으로 게임 이미지 생성이 해결됐다고 판정하면 안 된다.
+- 과거 게임 브라우저가 `POST http://127.0.0.1:8189/api/image/generate`로 보낸 두 요청이 HTTP 500 `{"error":"internal error"}`를 반환한 로그가 있다. 이는 구형 8189 ImageGen 경로에서 관찰된 기록이다.
+- ComfyUI 8188에 직접 제출한 별도 테스트 workflow는 prompt 완료 및 PNG 출력까지 성공했다. 이는 ComfyUI 단독 생성 성공 이력이지, 새 PC 게임 API 브리지 경유 성공 증거는 아니다.
+- 새 PC 브랜치는 8189를 Remote Host가 직접 소유하도록 바꾸고, 게임 요청을 `LegacyGameImageApi` / `ComfyUiGateway`를 통해 ComfyUI 8188로 전달한다. Bun ImageGen을 새로 실행하지 않는다.
+- 실제 게임 payload의 `workflow=illustrious`는 기본 checkpoint `waiIllustriousSDXL_v170.safetensors`로 연결한다. 명시적 checkpoint 또는 custom workflow가 있으면 해당 설정을 보존한다.
+- 새 smoke test는 mock ComfyUI로 generate → status → 이미지 bytes 반환과 checkpoint 선택을 검사하도록 추가했지만 아직 실행하지 않았다.
+- 따라서 기존 HTTP 500의 실제 원인이 새 경로에서 해결됐는지, 실제 GPU 생성이 되는지, 최종 초상화가 게임 UI에 표시되는지는 아직 미검증이다.
+- 과거 `ECONNREFUSED` 기록은 현재 HTTP 500의 확정 원인으로 취급하지 않는다. 구형 `smoke-imagegen-runtime.ps1`의 health 성공만으로 새 직접 브리지의 실제 prompt 생성 성공을 판정하지 않는다.
 
 ### Pairing
 
@@ -142,16 +156,17 @@ QR nonce, 서명, bearer token, 개인키, 공개키 증명 payload는 기록하
 
 ### PC 측
 
-- ImageGen health에서 server alive와 Provider ready가 UI 상태에 정확히 반영된다.
-- Provider 미준비 시 프로세스가 자동 종료/재시작되지 않고 소유권 기록이 보존된다.
+- `ComfyUI Game API` health에서 bridge 생존과 ComfyUI Provider ready가 UI 상태에 정확히 반영된다.
+- Manager 소유 ComfyUI가 시작 중이면 최대 5분 동안 `Starting`으로 대기하고, Provider 미준비 시 프로세스가 자동 종료/재시작되지 않으며 소유권 기록이 보존된다.
 - Pairing local-network gate가 거절한 요청은 비밀정보 없이 서버 로그에서 경로/원격 주소/사유를 확인할 수 있다.
 - 기존 QR 서명, TLS pin, nonce, Device proof, 사용자 승인 및 명시적 revoke 흐름이 유지된다.
 
 ### ImageGen 실제 생성
 
 - 게임에서 발생한 실제 payload를 그대로 재현해 8189의 HTTP status와 response body를 확보한다.
-- ImageGen이 8188에 prompt를 제출했는지, prompt ID가 반환됐는지, 완료됐는지 확인한다.
+- 새 8189 bridge가 실제 게임 payload로 ComfyUI 8188에 prompt를 제출했는지, prompt ID가 반환됐는지, 완료됐는지 확인한다.
 - 최종 출력 파일이 실제 생성되고 이미지 디코딩이 가능한지 확인한다.
+- 반환된 `imageUrl`이 게임 브라우저에서 실제로 로드되고 해당 캐릭터 초상화에 반영되는지 확인한다.
 - PC 브라우저 직접 경로와 Android Remote Host proxy 경로를 각각 확인한다.
 - health smoke 통과만으로 생성 성공을 판정하지 않는다.
 
@@ -168,9 +183,10 @@ QR nonce, 서명, bearer token, 개인키, 공개키 증명 payload는 기록하
 
 ## 이번 작업의 검증 상태
 
-- PC 코드 변경: 적용됨 (위 세 커밋).
+- PC 코드 변경: 적용됨 (위 여섯 커밋; 최신 PC branch HEAD `03659c64aba62d2f14e1e3a900b4915761dedbd1`).
 - Android 코드 변경: 없음. 권장 diff만 이 문서에 기록.
-- PC 빌드 및 자동화 테스트: 이 작업 단계에서는 실행 결과를 확보하지 못했으므로 **NOT RUN**.
-- 실제 ImageGen prompt 생성: **NOT RUN**.
+- PC 빌드 및 자동화 테스트: **NOT RUN**. 새 mock bridge smoke test는 추가했지만 실행하지 않았다.
+- 새 8189 bridge를 통한 실제 ComfyUI GPU prompt 생성: **NOT RUN**.
+- 실제 게임 초상화의 최종 UI 출력: **NOT RUN**.
 - Android APK 빌드 및 물리 기기 pairing: **NOT RUN**.
 - 정식 릴리스, merge, deploy: 수행하지 않음.
