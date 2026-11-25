@@ -190,3 +190,92 @@ Smoke test에는 mock ComfyUI를 이용한 게임 요청 → prompt status → �
 - 실제 게임 초상화의 최종 UI 출력: **NOT RUN**.
 - Android APK 빌드 및 물리 기기 pairing: **NOT RUN**.
 - 정식 릴리스, merge, deploy: 수행하지 않음.
+
+---
+
+## 2026-11-25 추가 작업 명세 — 모바일 APK 내장 ImageGen 완전 제거 및 PC ComfyUI 단일 실행 경로
+
+### 확인된 모바일 APK 내장 구성
+
+기준 개발판 `work/official-dev-port` / `3d94a35167f5d2ce2d1fb1bdf219d47a0f970f0f`에서 다음 내장 구성을 확인했다.
+
+- `app/src/main/assets/imagegen-backend/launcher-bundle.json`
+- `app/src/main/assets/imagegen-backend/wayward-imagegen/**` — ImageGen 0.8.4 서버 소스
+- `app/src/main/java/com/wayward/launcher/ImageGenBackendInstaller.java` — APK assets를 앱 내부 저장소에 복사·검증·복구
+- `app/src/main/java/com/wayward/launcher/ImageGenService.java` — 별도 Android 프로세스에서 Bun 서버 실행
+- `app/src/main/java/com/wayward/launcher/ImageGenStatusStore.java` — 로컬 서버 상태 공유
+- `app/src/main/AndroidManifest.xml` — `:imagegen` 별도 프로세스 서비스 등록
+- `scripts/embed_imagegen_backend.py` — mods.zip에서 서버를 APK assets로 추출
+- `app/src/main/assets/imagegen-proxy.js`, `imagegen-studio-bridge.js` — 게임과 Image Studio 요청을 런처 네이티브 브리지로 전달
+- `MainActivity.java` — 로컬 서버 설치·시작·중지·상태 폴링 및 원격 PC 모드 전환
+- `RemoteGameImageApiClient.java` — 현재는 health/pack/generate/status/cancel/batch 일부만 원격 허용
+
+### 제거 대상과 반드시 보존할 구성
+
+목표는 APK에서 ImageGen 서버 런타임을 완전히 제거하고 PC Remote Host의 ComfyUI 직접 API만 이미지 생성 엔진으로 사용하는 것이다.
+
+제거 대상:
+- APK assets에 포함된 `imagegen-backend/**` 전체
+- ImageGen 서버를 APK에 복사하는 `ImageGenBackendInstaller`
+- Bun 서버를 별도 프로세스로 실행하는 `ImageGenService`
+- 로컬 ImageGen 전용 상태 저장·설치·시작·중지·복구 코드
+- Android Manifest의 ImageGen 전용 별도 프로세스 서비스
+- `scripts/embed_imagegen_backend.py` 및 이를 호출하는 CI/build 단계
+- 위 서버 전용 번들 복구/시작 테스트 및 서버 번들 의존성
+
+보존 대상:
+- `ImageGenProxy`의 WebView 요청 수신·응답 반환 기능은 PC 원격 요청 중계에 필요하므로 보존한다.
+- `imagegen-proxy.js` 및 `imagegen-studio-bridge.js`는 Image Studio UI의 요청을 네이티브 브리지로 전달하는 역할이므로, PC 원격 API 계약에 맞게 유지·수정한다. 이 파일들은 서버 런타임 번들이 아니다.
+- `RemoteGameImageApiClient`의 페어링된 PC 인증 경로, 선택된 게임 root 권한 검사, JSON 본문 크기 제한을 보존한다.
+- 이미지 pack/cache 조회, 이미지 hit, batch, cancel, status, 결과 이미지 URL 반환 기능을 보존한다.
+- NovelAI 토큰과 PC 인증 재료는 Android에서 PC로 전달하거나 로그에 기록하지 않는다.
+
+### 단일 경로 계약
+
+`게임 WebView → imagegen-studio-bridge.js → ImageGenProxy → RemoteGameImageApiClient → 인증된 PC /v1/game-image-api → PC LocalGameImageApiBridge → LegacyGameImageApi → ComfyUiGateway → ComfyUI 8188`
+
+- 페어링된 PC 모드에서는 모든 설정 조회·저장·기능 조회·모델 자원 조회·캐릭터 설정 요청과 생성 요청이 동일한 인증된 PC 경로를 통과해야 한다.
+- 모바일에 로컬 ImageGen 서버 또는 로컬 Bun fallback을 남기지 않는다.
+- PC가 연결되지 않거나 페어링이 유효하지 않으면 실제 HTTP 오류를 반환한다. 로컬 서버로 자동 전환하거나 성공으로 위장하지 않는다.
+- 허용 경로는 메서드까지 명시하는 allowlist로 제한한다. 범용 프록시나 임의 PC URL 전달은 금지한다.
+- 요청 JSON은 불필요한 재직렬화·필드 제거 없이 전달하되, 인증 정보 및 임의 파일 경로는 전달하지 않는다.
+- 이미지 데이터는 기존 파일 URL/바이너리 전달을 유지하고 Base64 전체 이미지를 JSON으로 중복 전송하지 않는다.
+
+### Image Studio 0.8.4 호환 API 범위
+
+원본 번들 `generationSettings.ts`에서 확인한 API 계약을 기준으로 다음 경로를 PC 브리지와 모바일 allowlist 양쪽에 동일하게 구현한다.
+
+- `GET/PUT /api/generation/settings`
+- `GET /api/generation/capabilities`
+- `GET /api/generation/resources`
+- `GET /api/generation/prompt-batch-support`
+- `POST /api/generation/select-models-folder`
+- `POST /api/generation/characters/discover`
+- `POST /api/generation/characters/discover-batch`
+- `POST /api/nai/check`는 ComfyUI 전용 모드에서 지원하지 않음을 명시하는 응답으로 처리하고 NovelAI 요청을 실행하지 않는다.
+
+설정은 SDXL/Illustrious, Anima, 캐릭터별 prompt/negative prompt/LoRA, sampler/scheduler, Clip Skip, dimensions, steps, CFG, global prompts, batch size를 포함한다. 저장 시 원본 설정 필드를 보존하고, 실행 불가능한 NAI 전용 필드는 지원 여부를 명시한다. 모델 폴더 선택은 PC Host의 허가된 폴더 선택/워크스페이스 정책을 사용하며 모바일에서 전달한 임의 경로를 PC가 직접 열지 않는다.
+
+### 성능 및 안정성 불변 조건
+
+- 설정은 PC 프로세스 내 캐시하고 PUT 시에만 원자적으로 저장한다.
+- ComfyUI `/object_info` 및 모델 자원 목록은 TTL 기반 캐시를 사용한다. 각 이미지 생성 요청에서 전체 설정 파일이나 모델 목록을 다시 읽지 않는다.
+- 생성 요청은 기존 비동기 prompt ID / status / cancel 흐름을 재사용한다.
+- 모바일 프록시는 요청 본문과 응답을 한 번만 읽고 전달하며 이미지 payload의 불필요한 복사·Base64 변환을 추가하지 않는다.
+- 동시 설정 저장은 직렬화하고, 생성 중 설정 변경은 이미 제출된 prompt에 소급 적용하지 않는다.
+- 기존 게임 root 격리, pairing 인증, loopback 전용 8189 listener, ComfyUI 프로세스 소유권 정책을 변경하지 않는다.
+
+### 완료 및 검증 조건
+
+- APK 산출물에서 `imagegen-backend`, Bun 실행 파일/설치 코드, ImageGen 별도 서비스가 제거됐음을 APK 내용물과 Manifest로 확인한다.
+- build/CI에서 mods.zip 또는 ImageGen 0.8.4 번들 추출 단계가 더 이상 실행되지 않음을 확인한다.
+- 모바일 원격 allowlist의 각 API method/path가 PC 브리지의 실제 route와 1:1 대응하는 계약 테스트를 추가한다.
+- 설정 GET → PUT → GET 왕복에서 전체 지원 필드와 미지원 필드의 보존/표시를 검증한다.
+- 설정 변경이 실제 ComfyUI workflow의 checkpoint/LoRA/prompt/sampler/scheduler/Clip Skip/steps/CFG/dimensions에 반영되는지 mock workflow 테스트로 검증한다.
+- 페어링 실패, PC 오프라인, 허용되지 않은 method/path, oversized body는 실패해야 하며 로컬 엔진 fallback이 없어야 한다.
+- PC 빌드/테스트, Android 빌드/테스트, 실제 ComfyUI GPU 생성, 게임 초상화 표시를 각각 별도로 기록한다. 미실행 항목은 통과로 보고하지 않는다.
+
+### 이번 추가 요청의 수행 상태
+
+이 절은 모바일 번들 제거 및 PC 단일 ComfyUI 경로 이식의 정확한 파일 범위와 API 계약을 기록한다. 문서 반영만으로 코드 제거·이식·빌드가 완료된 것은 아니다. 실제 코드 변경과 검증 결과는 후속 커밋의 diff 및 실행 로그로 별도 갱신한다.
+
