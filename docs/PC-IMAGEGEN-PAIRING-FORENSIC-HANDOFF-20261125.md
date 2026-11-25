@@ -279,3 +279,94 @@ Smoke test에는 mock ComfyUI를 이용한 게임 요청 → prompt status → �
 
 이 절은 모바일 번들 제거 및 PC 단일 ComfyUI 경로 이식의 정확한 파일 범위와 API 계약을 기록한다. 문서 반영만으로 코드 제거·이식·빌드가 완료된 것은 아니다. 실제 코드 변경과 검증 결과는 후속 커밋의 diff 및 실행 로그로 별도 갱신한다.
 
+
+
+---
+
+## 2026-11-25 추가 — PC ComfyUI 파라미터 수정 내역 및 모바일 원격 이식 지시
+
+### PC 개발판에 반영한 최소 변경
+
+저장소 `wal-studio/wayward-remote-host`, 브랜치 `fix/imagegen-readiness-pairing-diagnostics-20261125`에 기존 생성 경로를 유지한 채 다음 변경을 반영했다.
+
+- `GameWorkflowRepository.cs`: `GameWorkflowParameters`에 `Sampler`, `Scheduler`를 추가하고 사용자 지정 API 워크플로에서 `{{sampler}}`, `{{scheduler}}` 토큰을 치환한다.
+- `AnimaWorkflowFactory.cs`: 기존 기본값(`euler` / `simple`)을 보존하면서 sampler/scheduler/clipDevice를 선택적으로 받도록 확장했다.
+- `LegacyGameImageApi.cs`: 기존 생성 요청의 sampler/scheduler 값을 검증하고 SDXL 및 Anima 기본 워크플로에 전달한다. 설정값이 없는 구형 게임 요청은 기존 기본값을 유지한다. 설치된 ComfyUI의 실제 선택지 검증도 거친다.
+
+반영 커밋:
+- `2b18ef69d64db688e6f0b627392f52717f4ccd3d` — workflow token contract
+- `76088dbb3cfe30b3192458438975ddf2d795d174` — Anima workflow options
+- `3efff2bbb1b1caef8e2af6c0f8d5727270e55ec4` — existing game API generation mapping
+
+**중요한 검증 경계:** 위 변경은 생성 요청에 이미 포함된 sampler/scheduler 값을 실제 ComfyUI 워크플로에 전달하는 최소 수정이다. Image Studio 설정 GET/PUT, capabilities, resources, character discovery를 PC 브리지에 이식한 전체 구현은 아직 아니다. 이 문서의 모바일 작업을 시작하기 전에 PC의 나머지 설정 API 계약 구현과 빌드/통합 검증을 완료해야 한다. 위 커밋들은 소스 반영 사실이지 빌드·실행 통과 증거가 아니다.
+
+### 모바일 수정 대상은 가장 진보된 개발판으로 고정
+
+모바일 후속 작업은 공식 배포판, 오래된 migration 브랜치, `main`을 직접 수정하는 방식이 아니다. 저장소 `wal-studio/wayward-launcher-official`에서 확인된 가장 진보된 개발판인 **`work/official-dev-port`** 를 대상으로 한다.
+
+기준 HEAD 기록값: `3d94a35167f5d2ce2d1fb1bdf219d47a0f970f0f`. 실제 작업 착수 시점에 브랜치 HEAD와 작업 트리를 다시 확인하고, 이후 커밋이 존재하면 최신 개발판을 기준으로 변경을 재조정한다. 이 문서는 `main`에만 기록하며 모바일 개발판 코드는 여기서 수정하지 않는다.
+
+### 모바일 권장 최소 diff — 정확한 파일 및 동작
+
+1. `app/src/main/java/com/wayward/launcher/RemoteGameImageApiClient.java`
+   - 기존 인증·세션·rootId 처리와 정확한 경로별 allowlist를 유지한다.
+   - PC에서 구현·검증한 API에 한해 다음 경로/메서드를 명시적으로 추가한다.
+     - GET `/api/generation/settings`
+     - PUT `/api/generation/settings`
+     - GET `/api/generation/capabilities`
+     - GET `/api/generation/prompt-batch-support`
+     - GET `/api/generation/resources`
+     - POST `/api/generation/select-models-folder`
+     - POST `/api/generation/characters/discover`
+     - POST `/api/generation/characters/discover-batch`
+     - POST `/api/nai/check` (PC가 NAI 미지원 응답을 구현한 경우에만)
+   - 임의 경로 wildcard는 금지한다. 잘못된 메서드·경로는 거부한다.
+   - 원격 PC API에서 반환하는 HTTP status, content-type, body를 바꾸지 않고 전달한다.
+
+2. `app/src/main/java/com/wayward/launcher/ImageGenProxy.java`
+   - 페어링된 PC로 전달할 때 요청 method/path/query/body 및 응답 status/header/body를 보존한다.
+   - 현재 서로 다른 JSON 본문 제한을 PC 계약의 확정된 제한과 일치시킨다. 우선 4 MiB 상한을 적용하고 캐릭터 일괄 등록의 2 MiB 제한도 유지한다.
+   - 이미지 결과를 Base64로 재포장하지 않는다. 기존 이미지 URL/파일 응답 경로를 보존한다.
+   - 요청 취소, 연결 종료, timeout, 비정상 HTTP 응답을 성공으로 위장하지 않는다.
+
+3. `app/src/main/assets/imagegen-studio-bridge.js`
+   - 기존 Image Studio 0.8.4의 API method/path/query/body를 그대로 유지하고 원격 API client로 전달한다.
+   - 설정 API만 별도 로컬 주소로 보내거나 일부 API만 PC로 보내는 혼합 라우팅을 만들지 않는다.
+   - 브리지 재작성으로 기존 게임 생성·취소·상태·배치 API가 이중 호출되지 않도록 한다.
+
+4. 로컬 ImageGen 실행 경로 제거 작업과의 경계
+   - APK 내장 `imagegen-backend`, Bun 설치/실행 서비스 제거는 별도 제거 작업 범위다. 해당 제거를 할 경우 `ImageGenProxy`와 JS 브리지를 함께 삭제하면 안 된다. 이 두 파일은 원격 요청 전달 계층이다.
+   - 로컬 서버 실행/설치 참조만 제거하고 PC 원격 프록시, 이미지팩, 이미지 캐시, 이미지 hit, batch/cancel/status/result URL은 보존한다.
+   - 제거 후에도 Image Studio UI는 PC가 연결된 상태에서만 사용 가능하도록 명시적 상태를 표시한다.
+
+### 모바일이 임의로 가정하면 안 되는 PC API 계약
+
+- 설정 저장 성공은 PC의 영속 저장 성공 이후에만 반환한다.
+- GET 설정 응답에는 NovelAI 토큰 원문을 절대 포함하지 않는다.
+- NAI 전용 설정값은 삭제·변환하지 않는다. ComfyUI 미지원 상태로 명확히 표현한다.
+- 모델·LoRA·VAE 목록은 PC가 접근 가능한 실제 ComfyUI 모델 경로에서 조회한다. Android 파일 경로를 PC 경로로 전달하지 않는다.
+- `select-models-folder`는 PC 측 폴더 선택 기능을 호출한다. 모바일에서 임의의 PC 경로를 지정하는 기능으로 구현하지 않는다.
+- 캐릭터 discover 응답은 원본 0.8.4의 필드 구조를 유지한다.
+- capabilities는 정적 추정이 아니라 PC의 실제 설치 노드/입력 지원 결과를 반환한다.
+- 설정 저장 직후 다음 생성부터 새 설정이 적용되어야 하며, 이미 제출된 prompt_id의 실행 설정은 중간에 변경하지 않는다.
+
+### 모바일 완료 판정 — 필수 검증 게이트
+
+모바일 코드가 컴파일된다는 사실만으로 완료 처리하지 않는다. 아래를 모두 통과해야 한다.
+
+- 원본 0.8.4의 각 API method/path/query/body가 PC까지 그대로 전달됨.
+- PC 응답의 HTTP status/header/body가 모바일을 거쳐 원본 프론트엔드까지 동일하게 도착함.
+- 미페어링·세션 만료·권한 없는 rootId·미허용 경로·잘못된 메서드가 거부됨.
+- settings GET/PUT 왕복 및 앱 재시작 뒤 영속 설정 유지.
+- SDXL 설정(체크포인트, LoRA, sampler, scheduler, Clip Skip, 크기, 공통/캐릭터 프롬프트)이 실제 생성 graph에 반영됨.
+- Anima 설정(모델, CLIP, VAE, CLIP device, LoRA, sampler, scheduler, 크기, 프롬프트)이 실제 생성 graph에 반영됨.
+- capabilities/resources/prompt-batch-support/character discovery가 실제 PC ComfyUI 상태를 반영함.
+- 기존 생성, prompt_id 상태 조회, 취소, batch enqueue/control, 이미지 저장 및 게임 초상화 출력 회귀 없음.
+- JSON 크기 제한, timeout, cancellation, 오류 status가 양쪽에서 일치함.
+- Android APK에서 로컬 ImageGen 서버/번들 실행 경로가 제거된 경우 APK 검사에서 해당 번들·서비스가 없고 원격 전달 기능은 남아 있음.
+
+실제 Android 기기에서 PC 페어링 상태로 SDXL과 Anima 각각 생성하고, 결과 이미지가 게임 초상화 슬롯에 반영되는 end-to-end 검증이 필요하다. PC 단위 테스트나 에뮬레이터 테스트만으로 이 항목을 대체할 수 없다.
+
+### 개발판 정리/삭제 승인 규칙 — 필수
+
+모바일 개발판 `work/official-dev-port`에서 수정 후 빌드·테스트·실기기 원격 생성 검증이 모두 정상 통과하더라도 해당 개발 브랜치나 기존 작업물을 자동 삭제하지 않는다. 완료 증거와 삭제 대상(브랜치/파일/아티팩트)을 구체적으로 제시하고 **사용자에게 삭제해도 되는지 명시적인 승인을 먼저 받아야 한다.** 승인 전에는 브랜치·커밋·테스트 산출물 및 기존 작업물을 보존한다.
