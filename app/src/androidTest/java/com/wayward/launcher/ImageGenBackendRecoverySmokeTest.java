@@ -26,10 +26,9 @@ public final class ImageGenBackendRecoverySmokeTest {
             assertTrue("restored 0.8.4 backend must pass installer manifest/hash validation",
                     ImageGenBackendInstaller.isValidInstalled(installed));
 
-            ImageGenService.serverReady = false;
-            ImageGenService.serverAvailable = false;
-            ImageGenService.starting = false;
-            ImageGenService.statusMessage = null;
+            ImageGenStatusStore.State beforeStart = ImageGenStatusStore.read(context.getFilesDir());
+            assertTrue("previous ImageGen service must be stopped before recovery test",
+                    !beforeStart.isStarting() && !beforeStart.isAvailable());
             Intent start = new Intent(context, ImageGenService.class)
                     .setAction(ImageGenService.ACTION_START)
                     .putExtra(ImageGenService.EXTRA_BACKEND_ROOT, installed.getAbsolutePath())
@@ -39,20 +38,25 @@ public final class ImageGenBackendRecoverySmokeTest {
             else context.startService(start);
 
             long deadline = android.os.SystemClock.elapsedRealtime() + 240_000L;
+            ImageGenStatusStore.State state = ImageGenStatusStore.read(context.getFilesDir());
             while (android.os.SystemClock.elapsedRealtime() < deadline
-                    && !ImageGenService.serverAvailable
-                    && (ImageGenService.statusMessage == null || ImageGenService.starting)) {
+                    && !state.isAvailable()
+                    && (state.message.isEmpty() || state.isStarting())) {
                 android.os.SystemClock.sleep(500);
+                state = ImageGenStatusStore.read(context.getFilesDir());
             }
             assertTrue("ImageGen 0.8.4 server must answer /api/image/health; status="
-                    + ImageGenService.statusMessage, ImageGenService.serverAvailable);
-            assertNotNull("backend health probe must publish a status", ImageGenService.statusMessage);
+                    + state.message, state.isAvailable());
+            assertTrue("backend health probe must publish a fresh cross-process status",
+                    state.isFresh() && !state.message.isEmpty());
         } finally {
             try { context.startService(stop); } catch (Exception ignored) {}
             long stopDeadline = android.os.SystemClock.elapsedRealtime() + 15_000L;
+            ImageGenStatusStore.State stopped = ImageGenStatusStore.read(context.getFilesDir());
             while (android.os.SystemClock.elapsedRealtime() < stopDeadline
-                    && (ImageGenService.serverAvailable || ImageGenService.starting)) {
+                    && (stopped.isAvailable() || stopped.isStarting())) {
                 android.os.SystemClock.sleep(250);
+                stopped = ImageGenStatusStore.read(context.getFilesDir());
             }
             deleteTree(backend);
         }
