@@ -303,4 +303,3 @@ should be of.
 게임의 `이미지 스튜디오 → 이미지 생성 방식 지정 → NovelAI (NAI)`에서 토큰과 생성값을 저장합니다. NAI를 선택하면 ComfyUI 없이 일반 생성·대기열·검수 승인을 처리합니다. 기존 게임이 엔진 준비 상태로 사용하는 health의 `comfyui` 필드는 NAI 준비 시에도 `connected`를 반환하며, 실제 엔진은 `imageProvider: "nai"`, `comfyuiRequired: false`로 구분합니다. health의 토큰 설정 유무는 인증 성공을 의미하지 않으므로 `/api/nai/check`로 따로 확인합니다.
 
 API 토큰은 설정 응답에 포함하지 않습니다. `PUT /api/generation/settings`의 빈 `naiToken`은 기존 토큰을 유지하고 `naiTokenClear: true`로 삭제합니다. NAI 전용 프롬프트와 모든 생성값을 캐시 해시에 반영합니다. 사용자 상태와 토큰은 배포 대상에 포함하지 마세요. 자세한 사용법은 모드 상위의 README.md에 있습니다.
-
