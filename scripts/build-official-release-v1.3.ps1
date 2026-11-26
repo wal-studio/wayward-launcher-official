@@ -35,9 +35,9 @@ if ($apks.Count -ne 1) { throw "Expected exactly one Official APK; found $($apks
 $apk = $apks[0].FullName
 $sdk = $env:ANDROID_HOME
 if ([string]::IsNullOrWhiteSpace($sdk)) { $sdk = $env:ANDROID_SDK_ROOT }
-$isWindows = [System.Environment]::OSVersion.Platform -eq [System.PlatformID]::Win32NT
-$aaptName = if ($isWindows) { "aapt.exe" } else { "aapt" }
-$apksignerName = if ($isWindows) { "apksigner.bat" } else { "apksigner" }
+$runningOnWindows = [System.Environment]::OSVersion.Platform -eq [System.PlatformID]::Win32NT
+$aaptName = if ($runningOnWindows) { "aapt.exe" } else { "aapt" }
+$apksignerName = if ($runningOnWindows) { "apksigner.bat" } else { "apksigner" }
 $aapt = Join-Path $sdk ("build-tools/35.0.0/" + $aaptName)
 $apksigner = Join-Path $sdk ("build-tools/35.0.0/" + $apksignerName)
 if (-not (Test-Path $aapt) -or -not (Test-Path $apksigner)) { throw "Android Build Tools 35.0.0 are unavailable under $sdk." }
