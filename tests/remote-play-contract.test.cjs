@@ -170,7 +170,7 @@ assert.match(client, /readLimited\(stream, 64 \* 1024 \* 1024\)/,
   'raw ImageGen responses must preserve the 64 MiB response limit');
 assert.match(main, /imageGenProxyFetch\(String requestId,String method,String path,String headersJson,String bodyBase64,boolean hasBody\)/,
   'the native JavaScript bridge must receive the request-body presence flag');
-assert.match(bridge, /serveImageGen\(MainActivity\.this/,
+assert.match(main, /serveImageGen\(MainActivity\.this/,
   'native ImageGen output URLs must be intercepted separately from game-folder resources');
 assert.match(bridge, /openAuthenticatedConnection\([\s\S]*?requestPath, "GET", requestHeaders\)/,
   'ImageGen resource reads must preserve query and range headers without adding a game root');
