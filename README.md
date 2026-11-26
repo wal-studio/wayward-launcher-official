@@ -29,9 +29,14 @@ NovelAI Persistent API Token은 NovelAI 웹사이트의 Settings → Account →
 서버 OFF 상태에서는 기존 게임 설정에 외부 생성 주소가 남아 있어도 인게임 Image Studio 브리지가 해당 주소를 probe하거나 호출하지 않습니다. 서버 ON 상태에서는 생성 API를 런처 내장 NovelAI ImageGen으로만 연결하고 다른 공급자나 이미지팩/CDN fallback으로 우회하지 않습니다.
 
 ## Google Drive CloudSave
-Android 런처 안에서는 기존 CloudSave 0.4.4의 Vercel 팝업 URL을 네이티브 Google Identity Services AuthorizationClient로 중계합니다. 요청 범위는 Drive App Data(drive.appdata)이며, 결과 토큰은 JS에 전달하기 위한 프로세스 메모리의 nonce별 일회성 결과로만 보관합니다. 게임 모드의 기존 암호화·저장/불러오기 로직은 수정하지 않습니다.
 
-일반 브라우저에서는 기존 Vercel OAuth 팝업 경로를 그대로 사용합니다. Android에서는 기존 Web OAuth 클라이언트와 별도로 같은 Google Cloud 프로젝트에 Android OAuth 클라이언트를 등록해야 합니다.
+CloudSave 0.6.3은 Android 런처 APK에 기본 포함됩니다. `app/src/main/assets/wml/mods/cloud-save/`에 `mod.js`와 `crypto.js`를 앱 자산으로 탑재하고, 기존 WebView `FolderHandler`가 `wml/mods/cloud-save/*` 요청을 게임 폴더와 사용자 ZIP 모드 다음 우선순위로 제공합니다. 게임 폴더에 파일을 복사하거나 압축을 풀지 않으며, 게임 HTML·`mods.zip`도 수정하지 않습니다.
+
+런처는 WML 모드 폴더 목록에 `cloud-save`를 포함하고, 게임의 `wml/mods/mods.js` 응답에만 기본 활성 ID를 추가합니다. 원본 파일은 변경하지 않습니다. 기존 모드 ID와 순서는 유지하며, 이미 등록된 `cloud-save`와 사용자가 명시한 `cloud-save:off`는 중복 추가하거나 덮어쓰지 않습니다. 게임 폴더 또는 사용자가 설치한 ZIP 안에 같은 ID가 있으면 해당 복사본을 기본 APK 자산보다 우선합니다.
+
+Android 인증은 런처의 네이티브 Google Identity Services AuthorizationClient를 사용합니다. 요청 범위는 Drive App Data(`drive.appdata`)이며, nonce별 일회성 결과만 JS에 전달합니다. 브라우저에서는 정적 GIS 인증 페이지 `https://jeiky224.github.io/cloud/auth-061.html`와 nonce-bound popup 경로를 사용합니다. 기존 Drive 저장 파일 형식, 암호화, 슬롯 ID, 저장·불러오기 호환성은 유지됩니다. 0.6.3의 Wayward/Faith 네이티브 저장 목록 행 텍스트 보존도 포함합니다.
+
+Android에서는 기존 Web OAuth 클라이언트와 별도로 같은 Google Cloud 프로젝트에 Android OAuth 클라이언트를 등록해야 합니다.
 
 - Debug: 패키지명 `com.wayward.launcher.official.debug`, SHA-1 `01:A6:82:34:B0:42:25:E9:86:39:99:4C:DC:91:66:D2:FF:6D:25:76`
 - ZIP 모드 파일 선택 결과가 Google 인증 결과 처리와 충돌하던 문제를 수정했습니다.
