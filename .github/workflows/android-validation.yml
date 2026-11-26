@@ -2,7 +2,7 @@ name: Official Android validation
 
 on:
   pull_request:
-    branches: [main, 'work/**']
+    branches: [main, 'work/**', 'migration/**']
   push:
     branches:
       - main
@@ -72,6 +72,13 @@ jobs:
 
       - name: Test Google OAuth bridge contract
         run: node scripts/test-google-auth-bridge.cjs
+      - name: Test bundled CloudSave 0.6.3 overlay and opt-out contract
+        run: |
+          node tests/cloudsave-bundle-contract.test.cjs
+          test_dir="$RUNNER_TEMP/cloudsave-bootstrap-test"
+          mkdir -p "$test_dir"
+          javac -d "$test_dir" app/src/main/java/com/wayward/launcher/WmlModListBootstrap.java tests/WmlModListBootstrapTest.java
+          java -cp "$test_dir" com.wayward.launcher.WmlModListBootstrapTest
 
       - name: Test Image Studio server/image-pack mode isolation
         run: node tests/imagegen-studio-mode.test.mjs

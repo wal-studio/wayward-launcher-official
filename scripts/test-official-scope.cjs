@@ -84,13 +84,14 @@ assert.doesNotMatch(application, /DiagnosticsUploader\.uploadPending/, 'automati
 assert.match(manifest, /ImageGenService/, 'the user-started image-generation service must be registered');
 assert.match(manifest, /NovelAiSettingsActivity/, 'the NAI credential screen must be registered');
 assert.doesNotMatch(manifest, /ImageProviderActivity/, 'the legacy generic Cloudflare provider editor must stay out of the official UI');
-assert.match(main, /startGoogleDriveAuth\(String nonce\)/, 'native Drive authorization bridge must exist');
-assert.match(main, /takePendingStateForNonce\(String nonce\)/, 'nonce-scoped one-time result handoff must exist');
-assert.match(main, /clearGoogleAccessToken\(String token\)/, 'invalid native Drive tokens must be clearable');
+assert.match(main, /startGoogleDriveAuth\(String nonce,String capability\)/, 'capability-scoped native Drive authorization bridge must exist');
+assert.match(main, /takePendingStateForNonce\(String nonce,String capability\)/, 'capability-scoped nonce one-time result handoff must exist');
+assert.match(main, /takePendingStateForNonce\(String nonce,String capability\)\{\s*if\(!hasGoogleAuthBridgeCapability\(capability\)/, 'nonce result handoff must validate the WebView capability');
+assert.match(main, /clearGoogleAccessToken\(String token,String capability\)/, 'capability-scoped invalid native Drive token clearing must exist');
 assert.match(main, /startImageServerAfterNaiSettings=true;\s*openNovelAiSettings\(\);\s*return;/,
   'starting generation without a token must open NAI settings and remember the requested start');
 const naiResultStart = main.indexOf('if(req==REQUEST_NAI_SETTINGS)');
-const naiResultEnd = main.indexOf('if(req==REQUEST_GOOGLE_AUTH)', naiResultStart);
+const naiResultEnd = main.indexOf('String authNonce=pendingGoogleAuthRequestNonces.remove(req);', naiResultStart);
 assert(naiResultStart >= 0 && naiResultEnd > naiResultStart, 'NAI settings result handler must exist');
 assert.match(main.slice(naiResultStart, naiResultEnd), /requestedStart\|\|IMAGE_MODE_GENERATION\.equals\(currentImageMode\(\)\)/,
   'saving a token from a pending server-start flow must resume server startup');
@@ -113,16 +114,27 @@ assert.match(main.slice(webStart, webEnd), /installImageGenDocumentStartScript\(
 
 // Activity result request codes must be globally unique. A collision caused the
 // WebView ZIP/file picker result (4103) to be consumed by Google auth first.
-const mainRequestCodeNames = ['PICK_TREE', 'PICK_MOD_ZIP', 'REQUEST_GOOGLE_AUTH', 'REQUEST_NAI_SETTINGS'];
-const mainRequestCodes = mainRequestCodeNames.map((name) => {
-  const match = main.match(new RegExp(`\\b${name}\\s*=\\s*(\\d+)`));
-  assert(match, `MainActivity request code ${name} must exist`);
+const mainRequestCodes = ['PICK_TREE', 'PICK_MOD_ZIP', 'REQUEST_NAI_SETTINGS'].map((name) => {
+  const match = main.match(new RegExp('\\b' + name + '\\s*=\\s*(\\d+)'));
+  assert(match, 'MainActivity request code ' + name + ' must exist');
   return Number(match[1]);
 });
-const chooserRequestMatch = webFileChooser.match(/static final int REQUEST_CODE\s*=\s*(\d+)/);
-assert(chooserRequestMatch, 'WebView file chooser request code must exist');
-const allRequestCodes = [...mainRequestCodes, Number(chooserRequestMatch[1])];
-assert.equal(new Set(allRequestCodes).size, allRequestCodes.length,
-  'MainActivity and WebView file chooser ActivityResult request codes must be unique');
+assert.match(main, /REQUEST_GOOGLE_AUTH_MIN\s*=\s*60000/,
+  'Google auth must allocate request codes from its isolated high range');
+assert.match(main, /REQUEST_GOOGLE_AUTH_MAX\s*=\s*65534/,
+  'Google auth request-code range must remain bounded');
+assert.match(main, /reserveGoogleAuthRequestCode\(String nonce\)/,
+  'Google auth request codes must be allocated per nonce');
+assert.match(main, /nextGoogleAuthRequestCode\+\+/,
+  'Google auth request codes must advance instead of reusing a fixed code');
+
+const chooserRange = webFileChooser.match(/REQUEST_CODE_MIN\s*=\s*(\d+)[\s\S]*?REQUEST_CODE_MAX\s*=\s*(\d+)/);
+assert(chooserRange, 'WebView file chooser request-code range must exist');
+const chooserMin = Number(chooserRange[1]);
+const chooserMax = Number(chooserRange[2]);
+assert(chooserMin > Math.max(...mainRequestCodes) && chooserMax < 60000,
+  'WebView file chooser range must stay separate from MainActivity and Google auth ranges');
+assert.match(webFileChooser, /static boolean isRequestCode\(int requestCode\)/,
+  'WebView file chooser must identify only its own request-code range');
 
 console.log('Official v1 scope checks passed');
