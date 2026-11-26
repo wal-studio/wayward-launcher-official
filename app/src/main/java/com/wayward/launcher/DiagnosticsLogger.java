@@ -26,7 +26,10 @@ import java.util.regex.Pattern;
 /** Bounded, redacted NDJSON journal shared by the main and :imagegen processes. */
 final class DiagnosticsLogger {
     private static final long MAX_FILE_BYTES = 512L * 1024L;
+    private static final int MAX_STACK_CHARS = 160000;
     private static final String ACTIVE = "launcher.ndjson";
+    private static final String STACK_ACTIVE = "exception-stacks.ndjson";
+    private static final String STACK_PREVIOUS = "exception-stacks.previous.ndjson";
     private static final String PREVIOUS = "launcher.previous.ndjson";
     private static final Object LOCK = new Object();
     private static final Pattern BEARER = Pattern.compile("(?i)(Bearer\\s+)[A-Za-z0-9._~+/-]+=*");
@@ -51,6 +54,8 @@ final class DiagnosticsLogger {
             event.put("event", clean(name, 80));
             event.put("deviceId", deviceId(app));
             event.put("appVersion", appVersion(app));
+            event.put("versionCode", appVersionCode(app));
+            event.put("androidRelease", Build.VERSION.RELEASE == null ? "unknown" : Build.VERSION.RELEASE);
             event.put("sdk", Build.VERSION.SDK_INT);
             event.put("model", clean(Build.MANUFACTURER + " " + Build.MODEL, 80));
             event.put("process", clean(Application.getProcessName(), 80));
@@ -68,17 +73,85 @@ final class DiagnosticsLogger {
     }
 
     static void error(Context context, String component, String name, Throwable error) {
+        error(context, component, name, error, null);
+    }
+
+    static void error(Context context, String component, String name, Throwable error, JSONObject extra) {
         JSONObject details = new JSONObject();
         try {
+            if (extra != null) {
+                java.util.Iterator<String> keys = extra.keys();
+                while (keys.hasNext()) {
+                    String key = keys.next();
+                    details.put(key, extra.opt(key));
+                }
+            }
             details.put("exception", error == null ? "Unknown" : error.getClass().getName());
+            details.put("message", error == null || error.getMessage() == null ? "" : error.getMessage());
             if (error != null) {
                 java.io.StringWriter buffer = new java.io.StringWriter();
                 error.printStackTrace(new java.io.PrintWriter(buffer));
-                String stack = redact(buffer.toString());
-                details.put("stack", stack.substring(0, Math.min(3600, stack.length())));
+                String stack = buffer.toString();
+                String safeStack = redactLong(stack);
+                details.put("stack", safeStack.substring(0, Math.min(3600, safeStack.length())));
+                appendExceptionStack(context, component, name, error, stack);
             }
         } catch (Exception ignored) {}
         event(context, "ERROR", component, name, details);
+    }
+
+    private static void appendExceptionStack(Context context, String component, String name,
+            Throwable error, String stack) {
+        if (context == null || stack == null) return;
+        try {
+            JSONObject record = new JSONObject();
+            record.put("timestamp", System.currentTimeMillis());
+            record.put("component", clean(component, 48));
+            record.put("event", clean(name, 80));
+            record.put("exception", error == null ? "Unknown" : error.getClass().getName());
+            record.put("message", error == null || error.getMessage() == null ? "" : error.getMessage());
+            record.put("stack", stack);
+            byte[] bytes = (redactLong(record.toString()) + "\n").getBytes(StandardCharsets.UTF_8);
+            if (bytes.length > MAX_FILE_BYTES) throw new IllegalStateException("Exception stack record exceeds diagnostics journal limit.");
+            Context app = context.getApplicationContext();
+            synchronized (LOCK) {
+                withFileLock(app, () -> {
+                    File dir = new File(app.getFilesDir(), "diagnostics");
+                    File active = new File(dir, STACK_ACTIVE);
+                    File previous = new File(dir, STACK_PREVIOUS);
+                    if (active.isFile() && active.length() + bytes.length > MAX_FILE_BYTES) {
+                        if (previous.exists()) previous.delete();
+                        if (active.exists()) Files.move(active.toPath(), previous.toPath(), StandardCopyOption.REPLACE_EXISTING);
+                    }
+                    try (FileOutputStream out = new FileOutputStream(active, true)) {
+                        out.write(bytes);
+                        out.flush();
+                        out.getFD().sync();
+                    }
+                });
+            }
+        } catch (Throwable ignored) {
+            // Failure diagnostics must never interrupt the launcher.
+        }
+    }
+
+    private static String redactLong(String value) {
+        if (value == null) return "";
+        String out = BEARER.matcher(value).replaceAll("$1[REDACTED]");
+        out = SECRET.matcher(out).replaceAll("$1[REDACTED]");
+        out = QUERY_SECRET.matcher(out).replaceAll("$1[REDACTED]");
+        out = CONTENT_URI.matcher(out).replaceAll("[URI]");
+        out = ABSOLUTE_PATH.matcher(out).replaceAll("[PATH]");
+        return out.length() > MAX_STACK_CHARS ? out.substring(0, MAX_STACK_CHARS) : out;
+    }
+
+    private static long appVersionCode(Context context) {
+        try {
+            android.content.pm.PackageInfo info = context.getPackageManager().getPackageInfo(context.getPackageName(), 0);
+            return Build.VERSION.SDK_INT >= 28 ? info.getLongVersionCode() : info.versionCode;
+        } catch (Exception ignored) {
+            return -1L;
+        }
     }
 
     static String deviceId(Context context) {

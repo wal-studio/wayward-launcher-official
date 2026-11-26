@@ -72,6 +72,21 @@ public class MainActivity extends Activity {
     private static final String PREFS="wayward_launcher";
     private static final String KEY_TREE="game_tree_uri", KEY_PROFILES="game_profiles", KEY_ZIP_REV="zip_mod_revision", KEY_COMFY_URL="comfy_server_url", KEY_IMAGE_MODE="image_server_mode";
     private static final String IMAGE_MODE_PACKS_ONLY="image-packs-only", IMAGE_MODE_GENERATION="image-generation", IMAGE_MODE_REMOTE_PC="remote-pc";
+    private static final int MAX_DEFAULT_CHARACTER_CDN_REDIRECTS=3, MAX_DEFAULT_CHARACTER_CDN_BYTES=12*1024*1024;
+    interface DefaultCharacterCdnConnectionFactory {
+        javax.net.ssl.HttpsURLConnection open(java.net.URL url) throws java.io.IOException;
+    }
+    private static volatile DefaultCharacterCdnConnectionFactory defaultCharacterCdnConnectionFactoryForTesting;
+    static void setDefaultCharacterCdnConnectionFactoryForTesting(DefaultCharacterCdnConnectionFactory factory){
+        defaultCharacterCdnConnectionFactoryForTesting=factory;
+    }
+    private javax.net.ssl.HttpsURLConnection openDefaultCharacterCdnConnection(String url) throws java.io.IOException{
+        DefaultCharacterCdnConnectionFactory factory=defaultCharacterCdnConnectionFactoryForTesting;
+        java.net.URL parsed=new java.net.URL(url);
+        return factory==null
+                ?(javax.net.ssl.HttpsURLConnection)parsed.openConnection()
+                :factory.open(parsed);
+    }
     private static final String KO="Wayward_WML_ko.html", EN="Wayward_WML.html";
     private static final Pattern ID=Pattern.compile("^[a-z0-9][a-z0-9._-]*$");
     private static final Set<String> RUNNING_SESSIONS=Collections.synchronizedSet(new HashSet<>());
@@ -139,6 +154,8 @@ public class MainActivity extends Activity {
     private RemoteHostDiscovery remoteHostDiscovery;
     private boolean remoteReconnectInProgress;
 
+    private boolean diagnosticsConsentDialogShowing;
+
     @Override public void onCreate(Bundle b){
         super.onCreate(b);
         String sessionId=sessionProfileId(getIntent());
@@ -156,7 +173,6 @@ public class MainActivity extends Activity {
     @Override protected void onResume(){
         super.onResume();
         if(web!=null)web.onResume();
-        DiagnosticsUploader.uploadPending(this);
         if(imagePackDirectoryAccess!=null)imagePackDirectoryAccess.onResume();
         logGameLifecycle("INFO","activity_resume",sessionProfileId(getIntent()),
                 activeGameLaunchRequestId,"onResume");
@@ -172,23 +188,13 @@ public class MainActivity extends Activity {
                 reconnectRemoteHostInBackground();
             }
         }
+        if(!BuildConfig.WAL_OFFICIAL)startRemoteHostRevocationMonitorIfNeeded();
         if(BuildConfig.WAL_OFFICIAL){
             OfficialUpdateManager.installPendingIfAllowed(this);
             if(home!=null&&home.getVisibility()==View.VISIBLE){
                 OfficialUpdateManager.checkForUpdate(this, update -> {
                     if(isFinishing()||isDestroyed())return;
-                    String message="새 WAL Android Launcher 업데이트 "+update.versionName+"이 있습니다.";
-                    if(!update.notes.trim().isEmpty()){
-                        String notes=update.notes.trim();
-                        if(notes.length()>600)notes=notes.substring(0,600)+"…";
-                        message+="\n\n"+notes;
-                    }
-                    new AlertDialog.Builder(this)
-                            .setTitle("업데이트 확인")
-                            .setMessage(message)
-                            .setNegativeButton("나중에",null)
-                            .setPositiveButton("업데이트",(dialog,which)->OfficialUpdateManager.install(this,update))
-                            .show();
+                    showOfficialUpdateDialog(update);
                 });
             }
         }
@@ -198,6 +204,7 @@ public class MainActivity extends Activity {
                 activeGameLaunchRequestId,"onPause");
         if(imagePackDirectoryAccess!=null)imagePackDirectoryAccess.onPause();
         if(web!=null)web.onPause();
+        RemoteHostRevocationMonitor.stop(this);
         if(remoteHostDiscovery!=null){
             try{remoteHostDiscovery.close();}catch(Exception ignored){}
             remoteHostDiscovery=null;
@@ -280,41 +287,124 @@ public class MainActivity extends Activity {
             Toast.makeText(this, "진단 로그를 전송 중입니다. 잠시 후 다시 시도하세요.", Toast.LENGTH_LONG).show();
             return;
         }
+        if (diagnosticsConsentDialogShowing) return;
+        diagnosticsConsentDialogShowing = true;
+        AlertDialog consent = new AlertDialog.Builder(this)
+                .setTitle("진단 로그 전송 동의")
+                .setMessage("동의한 경우에만 진단 ZIP을 만들고 전송합니다.\n\n"
+                        + "수집 항목: 앱 버전·패키지, Android 버전/SDK, 기기 모델, 무작위 설치 식별자, "
+                        + "런처 및 이미지팩 이벤트 로그, 예외 종류·메시지·스택, ImageGen 시작/서버 로그의 최근 일부.\n\n"
+                        + "전송 목적: Wayward 런처 오류 및 이미지팩/이미지 생성 장애 분석.\n"
+                        + "전송 대상: Cloudflare Worker wayward-diagnostics-ingest. 기존 Worker가 D1에 제출 정보를, "
+                        + "R2에 진단 ZIP을 보관합니다.\n\n"
+                        + "마스킹: Bearer/API 키/토큰/비밀번호/쿠키와 기기 절대 경로·content URI를 가능한 범위에서 가립니다. "
+                        + "예외 메시지와 진단 문맥에는 환경 정보가 남을 수 있습니다.\n"
+                        + "게임 HTML, 세이브, 이미지 파일, 선택한 게임 폴더의 파일 내용은 수집하지 않습니다. "
+                        + "전송 후 Android 공유 메뉴가 열리며, 추가 공유는 직접 앱을 선택해야 합니다.")
+                .setNegativeButton("취소", (dialog, which) -> diagnosticsConsentDialogShowing = false)
+                .setPositiveButton("동의하고 전송", (dialog, which) -> {
+                    diagnosticsConsentDialogShowing = false;
+                    uploadDiagnosticsZipAfterConsent();
+                })
+                .create();
+        consent.setOnCancelListener(dialog -> diagnosticsConsentDialogShowing = false);
+        consent.setOnDismissListener(dialog -> diagnosticsConsentDialogShowing = false);
+        consent.show();
+    }
+
+    private void uploadDiagnosticsZipAfterConsent(){
+        if (DiagnosticsBundleUploader.isUploading()) {
+            Toast.makeText(this, "진단 로그를 이미 전송 중입니다.", Toast.LENGTH_LONG).show();
+            return;
+        }
+        File selectedArchive;
+        boolean retrying;
         try {
             File archive = DiagnosticsBundleUploader.findPendingArchive(this);
-            boolean retrying = archive != null;
+            retrying = archive != null;
             if (!retrying) archive = DiagnosticsBundleExporter.create(this);
-            final File selectedArchive = archive;
-            ImagePackDiagnostics.event(this, imagePackDiagnosticSessionId, "",
-                    "diagnostics_cloud_upload_requested", "info",
-                    new JSONObject().put("fileSize", selectedArchive.length())
-                            .put("retryingPreviousZip", retrying));
-            DiagnosticsBundleUploader.upload(this, selectedArchive, (success, result) -> {
-                if (isFinishing() || isDestroyed()) return;
-                JSONObject details = new JSONObject();
-                try {
-                    details.put("success", success);
-                    details.put("result", result == null ? "" : result);
-                    details.put("fileSize", selectedArchive.length());
-                    details.put("retryingPreviousZip", retrying);
-                } catch (Exception ignored) {}
-                ImagePackDiagnostics.event(this, imagePackDiagnosticSessionId, "",
-                        success ? "diagnostics_cloud_upload_succeeded" : "diagnostics_cloud_upload_failed",
-                        success ? "info" : "error", details);
-                String message = success
-                        ? (retrying ? "이전 진단 ZIP 재전송 완료" : "진단 로그 자동 전송 완료")
-                        : "진단 로그 자동 전송 실패 · 다음 진단 버튼 터치 시 같은 ZIP 재전송";
-                Toast.makeText(this, message, Toast.LENGTH_LONG).show();
-            });
-            // Preserve the existing Android share sheet using the exact same ZIP.
-            DiagnosticsBundleExporter.share(this, selectedArchive);
-            ImagePackDiagnostics.event(this, imagePackDiagnosticSessionId, "", "diagnostics_share_chooser_opened",
-                    "info", null);
+            selectedArchive = archive;
         } catch (Exception error) {
             ImagePackDiagnostics.error(this, imagePackDiagnosticSessionId, "",
-                    "diagnostics_share_failed", error);
-            Toast.makeText(this, "진단 ZIP 수집 실패: " + msg(error), Toast.LENGTH_LONG).show();
+                    "diagnostics_zip_create_failed", error);
+            Toast.makeText(this, "진단 ZIP 생성 실패: " + msg(error), Toast.LENGTH_LONG).show();
+            return;
         }
+
+        final File archive = selectedArchive;
+        final boolean retry = retrying;
+        JSONObject requestDetails = new JSONObject();
+        try {
+            requestDetails.put("fileSize", archive.length());
+            requestDetails.put("retryingPreviousZip", retry);
+        } catch (Exception ignored) {}
+        ImagePackDiagnostics.event(this, imagePackDiagnosticSessionId, "",
+                "diagnostics_cloud_upload_requested", "info", requestDetails);
+        DiagnosticsBundleUploader.upload(this, archive, (success, result) -> {
+            if (isFinishing() || isDestroyed()) return;
+            JSONObject details = new JSONObject();
+            try {
+                details.put("success", success);
+                details.put("result", result == null ? "" : result);
+                details.put("fileSize", archive.length());
+                details.put("retryingPreviousZip", retry);
+            } catch (Exception ignored) {}
+            ImagePackDiagnostics.event(this, imagePackDiagnosticSessionId, "",
+                    success ? "diagnostics_cloud_upload_succeeded" : "diagnostics_cloud_upload_failed",
+                    success ? "info" : "error", details);
+            String message = success
+                    ? (retry ? "이전 진단 ZIP 재전송 완료" : "진단 로그 전송 완료")
+                            + " · " + (result == null ? "제출 확인됨" : result)
+                    : "진단 로그 전송 실패 (" + (result == null ? "unknown" : result)
+                            + ") · ZIP 보존됨, 다음 전송 시 다시 동의해야 합니다.";
+            Toast.makeText(this, message, Toast.LENGTH_LONG).show();
+        });
+
+        try {
+            DiagnosticsBundleExporter.share(this, archive);
+            ImagePackDiagnostics.event(this, imagePackDiagnosticSessionId, "",
+                    "diagnostics_share_chooser_opened", "info", null);
+        } catch (Exception error) {
+            ImagePackDiagnostics.error(this, imagePackDiagnosticSessionId, "",
+                    "diagnostics_share_chooser_failed", error);
+        }
+    }
+
+    private void showOfficialUpdateDialog(OfficialUpdateManager.Update update){
+        String currentVersion = BuildConfig.VERSION_NAME == null ? "unknown" : BuildConfig.VERSION_NAME;
+        StringBuilder message = new StringBuilder()
+                .append("현재 버전: ").append(currentVersion)
+                .append("\n신규 버전: ").append(update.versionName);
+        if(!update.notes.trim().isEmpty()){
+            String notes=update.notes.trim();
+            if(notes.length()>600)notes=notes.substring(0,600)+"…";
+            message.append("\n\n변경 내용:\n").append(notes);
+        }
+        message.append("\n\n업데이트를 선택한 경우에만 APK를 다운로드하고 SHA-256·패키지·서명을 검증합니다. "
+                + "설치는 Android 시스템 확인 화면에서 승인해야 합니다.");
+        new AlertDialog.Builder(this).setTitle("정식 업데이트 확인").setMessage(message.toString())
+                .setNegativeButton("나중에",(dialog,which)->OfficialUpdateManager.dismiss(this,update))
+                .setPositiveButton("업데이트",(dialog,which)->OfficialUpdateManager.install(this,update))
+                .show();
+    }
+
+    private void checkOfficialUpdatesManually(){
+        if(!BuildConfig.WAL_OFFICIAL)return;
+        Toast.makeText(this,"정식 업데이트를 확인하고 있습니다…",Toast.LENGTH_SHORT).show();
+        OfficialUpdateManager.checkForUpdateNow(this,(update,error)->{
+            if(isFinishing()||isDestroyed())return;
+            if(error!=null){
+                Toast.makeText(this,"업데이트 확인 실패: "+error.getMessage(),Toast.LENGTH_LONG).show();
+                return;
+            }
+            if(update==null){
+                new AlertDialog.Builder(this).setTitle("업데이트 확인")
+                        .setMessage("현재 최신 버전입니다.")
+                        .setPositiveButton("확인",null).show();
+                return;
+            }
+            showOfficialUpdateDialog(update);
+        });
     }
 
     private void showHome(){
@@ -349,11 +439,20 @@ public class MainActivity extends Activity {
         diagnosticsParams.leftMargin=dp(4);top.addView(diagnostics,diagnosticsParams);
         LinearLayout.LayoutParams topParams=new LinearLayout.LayoutParams(-1,-2);topParams.bottomMargin=dp(3);
         page.addView(top,topParams);
+        LinearLayout subtitleRow=new LinearLayout(this);
+        subtitleRow.setGravity(android.view.Gravity.CENTER_VERTICAL);
         TextView subtitle=uiText(BuildConfig.WAL_OFFICIAL?"WAL Android Launcher":"Wayward Android Launcher",11,Color.rgb(111,118,125),false);
         subtitle.setLetterSpacing(0.025f);
         subtitle.setSingleLine(true);
         subtitle.setEllipsize(android.text.TextUtils.TruncateAt.END);
-        page.addView(subtitle);
+        subtitleRow.addView(subtitle,new LinearLayout.LayoutParams(0,-2,1f));
+        if(BuildConfig.WAL_OFFICIAL){
+            Button updateCheck=compactButton("업데이트 확인",true,()->checkOfficialUpdatesManually());
+            LinearLayout.LayoutParams updateCheckParams=new LinearLayout.LayoutParams(dp(124),dp(40));
+            updateCheckParams.leftMargin=dp(8);
+            subtitleRow.addView(updateCheck,updateCheckParams);
+        }
+        page.addView(subtitleRow);
 
         LinearLayout statusCard=uiCard();
         LinearLayout.LayoutParams statusParams=new LinearLayout.LayoutParams(-1,-2);
@@ -413,6 +512,22 @@ public class MainActivity extends Activity {
         String mode=getSharedPreferences(PREFS,MODE_PRIVATE).getString(KEY_IMAGE_MODE,IMAGE_MODE_PACKS_ONLY);
         if(BuildConfig.WAL_OFFICIAL&&IMAGE_MODE_REMOTE_PC.equals(mode))return IMAGE_MODE_PACKS_ONLY;
         return mode;
+    }
+
+    static boolean isLauncherImageGenerationMode(android.content.Context context){
+        if(context==null)return false;
+        String mode=context.getSharedPreferences(PREFS,android.content.Context.MODE_PRIVATE)
+                .getString(KEY_IMAGE_MODE,IMAGE_MODE_PACKS_ONLY);
+        if(BuildConfig.WAL_OFFICIAL&&IMAGE_MODE_REMOTE_PC.equals(mode))mode=IMAGE_MODE_PACKS_ONLY;
+        return IMAGE_MODE_GENERATION.equals(mode);
+    }
+
+    static boolean isLauncherImageProvider(android.content.Context context,String provider){
+        if(provider==null||!isLauncherImageGenerationMode(context))return false;
+        ImageGenStatusStore.State state=ImageGenStatusStore.read(context.getFilesDir());
+        if(!state.isReady())return false;
+        String[] parts=state.backendVersion.split(":");
+        return parts.length>=3&&provider.equals(parts[2]);
     }
 
     private boolean localImageServerActive(){
@@ -557,8 +672,10 @@ public class MainActivity extends Activity {
             return;
         }
         new Thread(()->{
+            RemoteHostConnection host=null;
+            long expectedRegisteredAt=RemoteHostStore.getPairedRegisteredAtUtc(this);
             try{
-                RemoteHostConnection host=RemoteHostStore.loadConnection(this);
+                host=RemoteHostStore.loadConnection(this);
                 if(host==null)throw new IllegalStateException("등록된 PC Host가 없습니다.");
                 RemoteHostClient.authenticate(this,host);
                 JSONArray roots=RemoteHostClient.getWorkspaceRoots(this,host);
@@ -581,11 +698,17 @@ public class MainActivity extends Activity {
                         .show());
             }catch(Exception error){
                 String detail=msg(error);
-                if(isRemoteDeviceRevoked(error))RemoteHostStore.clearPaired(this,null);
+                boolean cleared=clearPairingIfRevoked(error,host,expectedRegisteredAt);
                 runOnUiThread(()->{
                     updatePairingButtonState();
-                    new AlertDialog.Builder(this).setTitle("PC 폴더 조회 실패").setMessage(detail)
-                            .setPositiveButton("확인",null).show();
+                    if(cleared){
+                        renderImageModePanel();
+                        if(imageModeStatus!=null)imageModeStatus.setText("PC에서 페어링을 해제했습니다.");
+                        Toast.makeText(this,"PC에서 페어링을 해제했습니다.",Toast.LENGTH_LONG).show();
+                    }else{
+                        new AlertDialog.Builder(this).setTitle("PC 폴더 조회 실패").setMessage(detail)
+                                .setPositiveButton("확인",null).show();
+                    }
                 });
             }
         },"Wayward-Remote-Root-Picker").start();
@@ -632,19 +755,43 @@ public class MainActivity extends Activity {
     }
 
     private boolean isRemoteDeviceRevoked(Exception error){
-        for(Throwable current=error;current!=null;current=current.getCause()){
-            String message=current.getMessage();
-            if(message==null)continue;
-            int jsonStart=message.indexOf('{');
-            if(jsonStart<0)continue;
-            try{
-                org.json.JSONObject body=new org.json.JSONObject(message.substring(jsonStart));
-                String code=body.optString("error","");
-                if("DeviceRevoked".equalsIgnoreCase(code)||
-                        "device_not_paired".equalsIgnoreCase(code))return true;
-            }catch(org.json.JSONException ignored){}
+        return RemoteHostClient.isDeviceRevokedError(error);
+    }
+
+    private boolean clearPairingIfRevoked(Exception error,RemoteHostConnection expectedHost,long expectedRegisteredAt){
+        if(!isRemoteDeviceRevoked(error))return false;
+        if(expectedHost==null||expectedRegisteredAt<=0L){
+            RemoteHostClient.clearSession();
+            return false;
         }
-        return false;
+        boolean cleared=RemoteHostStore.clearPaired(this,expectedHost.hostId,expectedRegisteredAt);
+        if(cleared)RemoteHostRevocationMonitor.stop(this);
+        return cleared;
+    }
+
+    private void startRemoteHostRevocationMonitorIfNeeded(){
+        if(BuildConfig.WAL_OFFICIAL||!RemoteHostStore.isPaired(this))return;
+        try{
+            RemoteHostRevocationMonitor.start(this,new RemoteHostRevocationMonitor.Listener(){
+                @Override public void onRevoked(){
+                    updatePairingButtonState();
+                    renderImageModePanel();
+                    if(imageModeStatus!=null)imageModeStatus.setText("PC에서 페어링을 해제했습니다.");
+                    Toast.makeText(MainActivity.this,
+                            "PC에서 페어링을 해제했습니다. 새 QR로 다시 페어링할 수 있습니다.",
+                            Toast.LENGTH_LONG).show();
+                }
+                @Override public void onConnectionLost(){
+                    if(imageModeStatus!=null)
+                        imageModeStatus.setText("PC 연결이 종료되었습니다. 기존 영구 페어링은 유지됩니다.");
+                    Toast.makeText(MainActivity.this,
+                            "PC 연결이 종료되었습니다. 기존 영구 페어링은 유지됩니다.",
+                            Toast.LENGTH_SHORT).show();
+                }
+            });
+        }catch(Exception error){
+            DiagnosticsLogger.error(this,"remote-host","revocation_monitor_start",error);
+        }
     }
 
     private void startRemoteHostDiscoveryIfNeeded(){
@@ -674,8 +821,10 @@ public class MainActivity extends Activity {
         new Thread(()->{
             String statusText="PC 연결이 준비되었습니다.";
             boolean revoked=false;
+            RemoteHostConnection host=null;
+            long expectedRegisteredAt=RemoteHostStore.getPairedRegisteredAtUtc(this);
             try{
-                RemoteHostConnection host=RemoteHostStore.loadConnection(this);
+                host=RemoteHostStore.loadConnection(this);
                 if(host==null)throw new IllegalStateException("PC 연결 정보가 없습니다.");
                 RemoteHostClient.authenticate(this,host);
                 JSONArray roots=RemoteHostClient.getWorkspaceRoots(this,host);
@@ -688,16 +837,23 @@ public class MainActivity extends Activity {
                 statusText=selectedFound?"PC 영구 페어링 및 자동 재연결 완료":"PC에 연결됐습니다. PC 폴더를 선택하세요.";
             }catch(Exception error){
                 revoked=isRemoteDeviceRevoked(error);
-                statusText=revoked?"PC에서 이 기기의 등록이 해제되었습니다. 다시 페어링하세요.":"PC 자동 재연결 대기 중: "+msg(error);
+                statusText=revoked?"PC에서 폐기 응답을 받았습니다. 등록 세대를 확인하고 있습니다.":"PC 자동 재연결 대기 중: "+msg(error);
+                if(revoked)clearPairingIfRevoked(error,host,expectedRegisteredAt);
             }finally{
-                if(revoked)RemoteHostStore.clearPaired(this,null);
-                String text=statusText;
+                final boolean stillPaired=RemoteHostStore.isPaired(this);
+                final boolean revokedFinal=revoked;
+                final String text=revoked&&!stillPaired?"PC에서 페어링을 해제했습니다.":(revoked
+                        ?"PC 폐기 응답을 받았지만 등록 세대를 확인할 수 없어 페어링 정보를 보존했습니다.":statusText);
                 runOnUiThread(()->{
                     remoteReconnectInProgress=false;
                     updatePairingButtonState();
-                    if(imageModeStatus!=null&&RemoteHostStore.isPaired(this))
-                        imageModeStatus.setText(text);
+                    if(imageModeStatus!=null)imageModeStatus.setText(text);
+                    if(revokedFinal&&!stillPaired){
+                        RemoteHostRevocationMonitor.stop(this);
+                        Toast.makeText(this,"PC에서 페어링을 해제했습니다.",Toast.LENGTH_LONG).show();
+                    }
                     renderImageModePanel();
+                    if(RemoteHostStore.isPaired(this))startRemoteHostRevocationMonitorIfNeeded();
                 });
             }
         },"Wayward-Remote-Host-Reconnect").start();
@@ -957,7 +1113,7 @@ public class MainActivity extends Activity {
                     profile=new GameProfile(UUID.randomUUID().toString().replace("-",""),value,name);
                     profiles.add(profile);
                 }
-                activeProfileId=profile.id;treeUri=picked;tree=new SafTree(picked);saveProfiles();
+                saveProfiles();
                 refreshStatus();renderProfiles();renderZipMods();
                 DiagnosticsLogger.event(this,"INFO","launcher","game_folder_registered",null);
                 Toast.makeText(this,"게임 폴더를 등록했습니다. 목록에서 실행할 수 있습니다.",Toast.LENGTH_LONG).show();
@@ -1518,8 +1674,30 @@ public class MainActivity extends Activity {
             }
             @Override public WebResourceResponse shouldInterceptRequest(WebView v,WebResourceRequest r){
                 Uri u=r.getUrl();
+                if(isPairedRemoteGeneratedImageRequest(u,r)){
+                    String remotePath=u.getEncodedPath();
+                    return RemoteGameResourceBridge.serve(MainActivity.this,
+                            remotePath.substring("/v1/game-image-api".length()),
+                            r.getRequestHeaders(),imageDiagnostics);
+                }
                 WebResourceResponse local=loader.shouldInterceptRequest(u);
                 if(local!=null)return local;
+                if(IMAGE_MODE_PACKS_ONLY.equals(currentImageMode())){
+                    String cdnPath=defaultCharacterCdnPath(u);
+                    if(cdnPath!=null){
+                        if(r.isForMainFrame())return null;
+                        String method=r.getMethod();
+                        if("HEAD".equalsIgnoreCase(method))return null;
+                        if(!"GET".equalsIgnoreCase(method)){
+                            return new WebResourceResponse("text/plain","UTF-8",405,"Method Not Allowed",
+                                    new java.util.HashMap<String,String>(),new ByteArrayInputStream(new byte[0]));
+                        }
+                        WebResourceResponse cdn=fetchDefaultCharacterCdnImage(u,imageDiagnostics);
+                        if(cdn!=null)return cdn;
+                        WebResourceResponse localFallback=serveImageRequest(folderHandler,cdnPath,imageDiagnostics);
+                        return localFallback!=null?localFallback:defaultCharacterCdnNotFoundResponse();
+                    }
+                }
                 if(domain.equalsIgnoreCase(u.getHost())&&u.getPort()==originPort){
                     String path=u.getPath();
                     if(FolderHandler.isGameRequestPath(path)){
@@ -1553,6 +1731,35 @@ public class MainActivity extends Activity {
         webFileChooser=new WebFileChooser(this,imagePackDiagnosticSessionId);web.setWebChromeClient(webFileChooser);root.addView(web,new FrameLayout.LayoutParams(-1,-1));web.setVisibility(View.GONE);
     }
 
+
+    private boolean isPairedRemoteGeneratedImageRequest(Uri uri,WebResourceRequest request){
+        if(uri==null||request==null||!"GET".equalsIgnoreCase(request.getMethod())
+                ||!IMAGE_MODE_REMOTE_PC.equals(currentImageMode()))return false;
+        String path=uri.getEncodedPath();
+        if(path==null||!path.startsWith("/v1/game-image-api/images/__wayward_generated__/"))return false;
+        String selectedRoot=RemoteHostStore.getSelectedRootId(this);
+        String requestRoot=uri.getQueryParameter("rootId");
+        if(selectedRoot==null||selectedRoot.isEmpty()||!selectedRoot.equals(requestRoot))return false;
+        try{
+            RemoteHostConnection host=RemoteHostStore.loadConnection(this);
+            if(host==null)return false;
+            return sameRemoteHostAuthority(uri,host.baseUrl)
+                    ||sameRemoteHostAuthority(uri,host.lanBaseUrl)
+                    ||sameRemoteHostAuthority(uri,host.wanBaseUrl);
+        }catch(Exception ignored){return false;}
+    }
+
+    private static boolean sameRemoteHostAuthority(Uri request,String trustedBaseUrl){
+        if(trustedBaseUrl==null||trustedBaseUrl.trim().isEmpty())return false;
+        Uri trusted=Uri.parse(trustedBaseUrl);
+        if(!"https".equalsIgnoreCase(request.getScheme())
+                ||!"https".equalsIgnoreCase(trusted.getScheme())
+                ||request.getHost()==null||trusted.getHost()==null
+                ||!request.getHost().equalsIgnoreCase(trusted.getHost()))return false;
+        int requestPort=request.getPort()<0?443:request.getPort();
+        int trustedPort=trusted.getPort()<0?443:trusted.getPort();
+        return requestPort==trustedPort;
+    }
 
     private void beginGoogleDriveAuth(String nonce){
         beginGoogleDriveAuth(nonce,false);
@@ -1686,8 +1893,195 @@ public class MainActivity extends Activity {
     }
 
     private boolean imageGenerationRoutingActive(){
-        ImageGenStatusStore.State state=ImageGenStatusStore.read(getFilesDir());
-        return state.isReady()||state.isAvailable()||state.isStarting();
+        // Routing follows the launcher's selected mode, not a possibly stale
+        // service heartbeat. Generation mode is cache-only even during startup.
+        return IMAGE_MODE_GENERATION.equals(currentImageMode());
+    }
+
+    private static String defaultCharacterCdnPath(Uri uri){
+        if(uri==null||!"https".equalsIgnoreCase(uri.getScheme())
+                ||!"art.sintention.com".equalsIgnoreCase(uri.getHost())
+                ||(uri.getPort()!=-1&&uri.getPort()!=443)
+                ||uri.getUserInfo()!=null||uri.getQuery()!=null||uri.getFragment()!=null)return null;
+        String encoded=uri.getEncodedPath();
+        if(encoded==null||encoded.length()>2048||encoded.indexOf('\\')>=0||encoded.indexOf('\0')>=0)return null;
+        for(int i=0;i<encoded.length();i++){
+            if(encoded.charAt(i)!='%')continue;
+            if(i+2>=encoded.length())return null;
+            int hi=Character.digit(encoded.charAt(i+1),16),lo=Character.digit(encoded.charAt(i+2),16);
+            if(hi<0||lo<0)return null;
+            int decoded=(hi<<4)|lo;
+            if(decoded==0x00||decoded==0x2e||decoded==0x2f||decoded==0x5c||decoded==0x25)return null;
+            i+=2;
+        }
+        String path=uri.getPath();
+        if(path==null||path.length()>2048||path.indexOf('\\')>=0||path.indexOf('\0')>=0)return null;
+        String[] segments=path.split("/",-1);
+        boolean legacy=segments.length>=7&&segments[0].isEmpty()&&"images".equals(segments[1])
+                &&"illustrious".equals(segments[2])&&"situation".equals(segments[3])
+                &&"info".equals(segments[4]);
+        boolean modern=segments.length>=6&&segments[0].isEmpty()&&"images".equals(segments[1])
+                &&"illustrious".equals(segments[2])&&"characters".equals(segments[3]);
+        String character=legacy?segments[5]:(segments.length>4?segments[4]:"");
+        if(!legacy&&!modern)return null;
+        if(legacy&&!("elena".equals(character)||"mara".equals(character)||"pippa".equals(character)))return null;
+        if(modern&&!character.matches("(?i)[a-z0-9][a-z0-9._-]{0,63}"))return null;
+        for(int i=1;i<segments.length;i++){
+            String segment=segments[i];
+            if(segment.isEmpty()||".".equals(segment)||"..".equals(segment))return null;
+            for(int j=0;j<segment.length();j++)if(Character.isISOControl(segment.charAt(j)))return null;
+        }
+        String file=segments[segments.length-1];
+        if(file.length()>240||!file.matches("(?i).+\\.(png|jpe?g|webp|gif|avif)"))return null;
+        return path;
+    }
+
+    private WebResourceResponse fetchDefaultCharacterCdnImage(Uri original,java.util.concurrent.atomic.AtomicInteger samples){
+        if(original==null)return null;
+        String currentUrl=original.toString();
+        for(int redirects=0;redirects<=MAX_DEFAULT_CHARACTER_CDN_REDIRECTS;redirects++){
+            Uri target=Uri.parse(currentUrl);
+            String path=defaultCharacterCdnPath(target);
+            if(path==null){recordDefaultCharacterCdnEvent("default_character_cdn_rejected",target,"redirect_or_url_policy",samples);return null;}
+            javax.net.ssl.HttpsURLConnection connection=null;
+            try{
+                connection=openDefaultCharacterCdnConnection(currentUrl);
+                connection.setConnectTimeout(3500);
+                connection.setReadTimeout(5000);
+                connection.setInstanceFollowRedirects(false);
+                connection.setRequestMethod("GET");
+                connection.setUseCaches(false);
+                connection.setRequestProperty("Cookie","");
+                connection.setRequestProperty("Authorization","");
+                connection.setRequestProperty("Proxy-Authorization","");
+                connection.setRequestProperty("Accept-Encoding","identity");
+                connection.setRequestProperty("Accept","image/avif,image/webp,image/apng,image/png,image/jpeg,image/gif;q=0.9,*/*;q=0.1");
+                int status=connection.getResponseCode();
+                if(status>=300&&status<400){
+                    if(redirects>=MAX_DEFAULT_CHARACTER_CDN_REDIRECTS){
+                        recordDefaultCharacterCdnEvent("default_character_cdn_failed",target,"redirect_limit",samples);
+                        return null;
+                    }
+                    String location=connection.getHeaderField("Location");
+                    if(location==null||location.trim().isEmpty()){
+                        recordDefaultCharacterCdnEvent("default_character_cdn_failed",target,"redirect_without_location",samples);
+                        return null;
+                    }
+                    java.net.URL next=new java.net.URL(new java.net.URL(currentUrl),location);
+                    Uri nextUri=Uri.parse(next.toString());
+                    if(defaultCharacterCdnPath(nextUri)==null){
+                        recordDefaultCharacterCdnEvent("default_character_cdn_rejected",nextUri,"redirect_destination_not_allowed",samples);
+                        return null;
+                    }
+                    currentUrl=next.toString();
+                    continue;
+                }
+                if(status!=200){
+                    recordDefaultCharacterCdnEvent("default_character_cdn_failed",target,"http_"+status,samples);
+                    return null;
+                }
+                String rawMime=connection.getContentType();
+                String mime=rawMime==null?"":rawMime.split(";",2)[0].trim().toLowerCase(Locale.ROOT);
+                if(!isAllowedDefaultCharacterCdnMime(mime)){
+                    recordDefaultCharacterCdnEvent("default_character_cdn_failed",target,"invalid_mime",samples);
+                    return null;
+                }
+                long contentLength=connection.getContentLengthLong();
+                if(contentLength>MAX_DEFAULT_CHARACTER_CDN_BYTES){
+                    recordDefaultCharacterCdnEvent("default_character_cdn_failed",target,"image_too_large",samples);
+                    return null;
+                }
+                byte[] bytes;
+                try(InputStream input=connection.getInputStream()){
+                    bytes=readDefaultCharacterCdnBytes(input,MAX_DEFAULT_CHARACTER_CDN_BYTES);
+                }
+                if(contentLength>=0&&bytes.length!=contentLength){
+                    recordDefaultCharacterCdnEvent("default_character_cdn_failed",target,"truncated_response",samples);
+                    return null;
+                }
+                if(!isDecodableDefaultCharacterCdnImage(mime,bytes)){
+                    recordDefaultCharacterCdnEvent("default_character_cdn_failed",target,"invalid_image_signature",samples);
+                    return null;
+                }
+                java.util.Map<String,String> headers=new java.util.HashMap<>();
+                headers.put("Cache-Control","public, max-age=3600");
+                headers.put("Access-Control-Allow-Origin","*");
+                recordDefaultCharacterCdnEvent("default_character_cdn_loaded",target,"",samples);
+                return new WebResourceResponse(mime,null,200,"OK",headers,new java.io.ByteArrayInputStream(bytes));
+            }catch(Exception error){
+                recordDefaultCharacterCdnEvent("default_character_cdn_failed",target,error.getClass().getSimpleName(),samples);
+                return null;
+            }finally{
+                if(connection!=null)connection.disconnect();
+            }
+        }
+        return null;
+    }
+
+    private static boolean isAllowedDefaultCharacterCdnMime(String mime){
+        return "image/png".equals(mime)||"image/jpeg".equals(mime)||"image/webp".equals(mime)
+                ||"image/gif".equals(mime)||"image/avif".equals(mime);
+    }
+
+    private static byte[] readDefaultCharacterCdnBytes(InputStream input,int maxBytes)throws Exception{
+        java.io.ByteArrayOutputStream output=new java.io.ByteArrayOutputStream();
+        byte[] buffer=new byte[16384];
+        int total=0;
+        while(true){
+            int count=input.read(buffer);
+            if(count<0)break;
+            if(count==0){
+                int single=input.read();
+                if(single<0)break;
+                total++;
+                if(total>maxBytes)throw new java.io.IOException("CDN image exceeds the 12 MiB limit.");
+                output.write(single);
+                continue;
+            }
+            total+=count;
+            if(total>maxBytes)throw new java.io.IOException("CDN image exceeds the 12 MiB limit.");
+            output.write(buffer,0,count);
+        }
+        return output.toByteArray();
+    }
+
+    private static boolean hasDefaultCharacterCdnImageSignature(String mime,byte[] bytes){
+        if(bytes==null)return false;
+        if("image/png".equals(mime))
+            return bytes.length>=8&&(bytes[0]&255)==0x89&&bytes[1]=='P'&&bytes[2]=='N'&&bytes[3]=='G'
+                    &&bytes[4]==13&&bytes[5]==10&&bytes[6]==26&&bytes[7]==10;
+        if("image/jpeg".equals(mime))
+            return bytes.length>=3&&(bytes[0]&255)==0xff&&(bytes[1]&255)==0xd8&&(bytes[2]&255)==0xff;
+        if("image/webp".equals(mime))
+            return bytes.length>=12&&bytes[0]=='R'&&bytes[1]=='I'&&bytes[2]=='F'&&bytes[3]=='F'
+                    &&bytes[8]=='W'&&bytes[9]=='E'&&bytes[10]=='B'&&bytes[11]=='P';
+        if("image/gif".equals(mime))
+            return bytes.length>=6&&bytes[0]=='G'&&bytes[1]=='I'&&bytes[2]=='F'
+                    &&bytes[3]=='8'&&(bytes[4]=='7'||bytes[4]=='9')&&bytes[5]=='a';
+        if("image/avif".equals(mime)){
+            if(bytes.length<12||bytes[4]!='f'||bytes[5]!='t'||bytes[6]!='y'||bytes[7]!='p')return false;
+            String brand=new String(bytes,8,4,java.nio.charset.StandardCharsets.US_ASCII);
+            return "avif".equals(brand)||"avis".equals(brand);
+        }
+        return false;
+    }
+
+    private static boolean isDecodableDefaultCharacterCdnImage(String mime,byte[] bytes){
+        if(!hasDefaultCharacterCdnImageSignature(mime,bytes))return false;
+        android.graphics.BitmapFactory.Options options=new android.graphics.BitmapFactory.Options();
+        options.inJustDecodeBounds=true;
+        android.graphics.BitmapFactory.decodeByteArray(bytes,0,bytes.length,options);
+        return options.outWidth>0&&options.outHeight>0;
+    }
+
+    private void recordDefaultCharacterCdnEvent(String event,Uri uri,String reason,java.util.concurrent.atomic.AtomicInteger samples){
+        if(samples!=null&&samples.getAndIncrement()>=16)return;
+        JSONObject details=new JSONObject();
+        try{
+            details.put("path",uri==null?"":uri.getPath());
+            if(reason!=null&&!reason.isEmpty())details.put("reason",reason);
+        }catch(Exception ignored){}
+        DiagnosticsLogger.event(this,event.endsWith("loaded")?"INFO":"WARN","webview",event,details);
     }
 
     private WebResourceResponse serveImageRequestByMode(FolderHandler handler,String path,
@@ -1700,6 +2094,13 @@ public class MainActivity extends Activity {
             return serveGeneratedImageRequest("/images/__wayward_generated__/"+path.substring(8),samples);
         }
         return serveImageRequest(handler,path,samples);
+    }
+
+    private WebResourceResponse defaultCharacterCdnNotFoundResponse(){
+        java.util.HashMap<String,String> headers=new java.util.HashMap<>();
+        headers.put("Cache-Control","no-store");
+        headers.put("X-Content-Type-Options","nosniff");
+        return new WebResourceResponse("text/plain","UTF-8",404,"Not Found",headers,new ByteArrayInputStream(new byte[0]));
     }
 
     private WebResourceResponse serveImageRequest(FolderHandler handler,String path,
@@ -1919,8 +2320,22 @@ public class MainActivity extends Activity {
         // The WML mod is only the in-game adapter. The server implementation is
         // shipped in the launcher APK and never copied from the selected game.
         if (!"imagestudio".equals(imageStudioModId(sessionTree))) return false;
-        File backend = ImageGenBackendInstaller.install(this, imageGenBackendRoot());
-        return hasImageGenProject(backend);
+        File backend;
+        try {
+            backend = ImageGenBackendInstaller.install(this, imageGenBackendRoot());
+        } catch (Exception error) {
+            DiagnosticsLogger.error(this, "imagegen_backend", "imagegen_backend_prepare_failed",
+                    error, new JSONObject().put("stage", "automatic_backend_install")
+                            .put("installTargetRelativePath", "imagegen/backend"));
+            throw error;
+        }
+        boolean valid = hasImageGenProject(backend);
+        if (!valid) {
+            DiagnosticsLogger.event(this, "ERROR", "imagegen_backend", "imagegen_backend_prepare_failed",
+                    new JSONObject().put("stage", "validate_installed_project")
+                            .put("installTargetRelativePath", "imagegen/backend"));
+        }
+        return valid;
     }
 
     private boolean hasImageGenProject(File backend) {
@@ -1946,6 +2361,26 @@ public class MainActivity extends Activity {
 
     private void ensureImageGenServer(SafTree sessionTree, Runnable afterReady) {
         if (afterReady != null) imageGenReadyCallbacks.add(afterReady);
+        if (!IMAGE_MODE_GENERATION.equals(currentImageMode())) {
+            imageGenSessionMessage = "런처에서 이미지 생성 모드를 선택하지 않아 서버 자동 시작을 차단했습니다.";
+            refreshImageGenStatus();
+            finishImageGenCallbacks();
+            return;
+        }
+        try {
+            String token = NovelAiTokenStore.readToken(this);
+            if (token == null || token.trim().isEmpty()) {
+                imageGenSessionMessage = "런처에 NovelAI 토큰을 먼저 등록해야 합니다.";
+                refreshImageGenStatus();
+                finishImageGenCallbacks();
+                return;
+            }
+        } catch (Exception error) {
+            imageGenSessionMessage = "런처 NovelAI 보안 저장소를 읽지 못했습니다: " + msg(error);
+            refreshImageGenStatus();
+            finishImageGenCallbacks();
+            return;
+        }
         if (sessionTree == null) {
             imageGenSessionMessage = "현재 게임 세션의 폴더를 확인할 수 없어 이미지 서버 자동 시작을 건너뛰었습니다.";
             finishImageGenCallbacks();
@@ -2180,10 +2615,14 @@ public class MainActivity extends Activity {
             return;
         }
         Runnable openSettings = () -> {
+            if (!IMAGE_MODE_GENERATION.equals(currentImageMode())) {
+                Toast.makeText(this, "런처에서 이미지 생성 서버를 선택한 뒤 Image Studio 생성 설정을 열 수 있습니다.", Toast.LENGTH_LONG).show();
+                return;
+            }
             ImageGenStatusStore.State state = ImageGenStatusStore.read(getFilesDir());
-            if (!state.isAvailable()) {
+            if (!state.isReady()) {
                 String detail = state.message == null || state.message.isEmpty()
-                        ? "이미지 서버 응답을 확인하지 못했습니다." : state.message;
+                        ? "런처가 선택한 이미지 공급자가 아직 준비되지 않았습니다." : state.message;
                 Toast.makeText(this,detail,Toast.LENGTH_LONG).show();
                 return;
             }
@@ -2205,11 +2644,9 @@ public class MainActivity extends Activity {
                         });
             }, 100L);
         };
-        // A verified active session can reuse the running service without a
-        // second SAF scan. Otherwise retain the normal detection/startup flow.
-        ImageGenStatusStore.State existing = ImageGenStatusStore.read(getFilesDir());
-        if (imageStudioSessionDetected && existing.isAvailable()) openSettings.run();
-        else ensureImageGenServer(tree, openSettings);
+        // Opening game settings must never start or change a launcher-managed server.
+        // Only the launcher's explicit mode switch is allowed to start the service.
+        openSettings.run();
     }
 
     private void registerSessionActivity() {
@@ -2282,12 +2719,22 @@ public class MainActivity extends Activity {
         refreshImageGenStatus();
         new Thread(()->{
             String failure=null;
+            String failureStage="backend_install";
             try{
                 ImageGenBackendInstaller.install(this,backend);
                 // Server availability is independent of provider credentials.
                 // NovelAI credentials are supplied only to the NovelAI runtime.
+                failureStage="runtime_config_prepare";
                 writeImageGenRuntimeConfig(backend,mode,requestedUrl);
             }catch(Throwable error){
+                JSONObject failureDetails = new JSONObject();
+                try {
+                    failureDetails.put("stage", failureStage);
+                    failureDetails.put("installTargetRelativePath", "imagegen/backend");
+                    failureDetails.put("backendVersion", ImageGenBackendInstaller.VERSION);
+                } catch (Exception ignored) {}
+                DiagnosticsLogger.error(this, "imagegen_backend", "imagegen_backend_prepare_failed",
+                        error, failureDetails);
                 failure=error.getMessage()==null?error.getClass().getSimpleName():error.getMessage();
             }
             final String problem=failure;
@@ -2331,7 +2778,8 @@ public class MainActivity extends Activity {
         config.put("port",8189);
         config.put("imagesDir",new File(getFilesDir(),"imagegen/images").getAbsolutePath());
         config.put("stateDir",new File(getFilesDir(),"imagegen/state").getAbsolutePath());
-        config.put("comfyUrl",comfyUrl==null||comfyUrl.isEmpty()?"http://127.0.0.1:8188":comfyUrl);
+        String launcherComfyUrl=comfyUrl==null||comfyUrl.isEmpty()?"http://127.0.0.1:8188":comfyUrl;
+        config.put("comfyUrl",launcherComfyUrl);
         config.put("imageProvider","novelai".equals(mode)?"nai":"sdxl");
         config.put("naiModel","nai-diffusion-4-5-full");
         // Android has no bundled sharp binary; PNG is the supported no-dependency path.
@@ -2341,7 +2789,7 @@ public class MainActivity extends Activity {
         File state=new File(getFilesDir(),"imagegen/state");
         if(!images.isDirectory()&&!images.mkdirs()&&!images.isDirectory())throw new IllegalStateException("이미지 저장 폴더를 만들지 못했습니다.");
         if(!state.isDirectory()&&!state.mkdirs()&&!state.isDirectory())throw new IllegalStateException("이미지 상태 폴더를 만들지 못했습니다.");
-        synchronizeImageGenProviderSetting(state,mode);
+        synchronizeImageGenProviderSetting(state,mode,launcherComfyUrl);
         File output=new File(project,"wayward-imagegen.config.json");
         File temporary=new File(project,"wayward-imagegen.config.json.tmp");
         try(FileOutputStream stream=new FileOutputStream(temporary)){
@@ -2359,14 +2807,16 @@ public class MainActivity extends Activity {
         }
     }
 
-    private void synchronizeImageGenProviderSetting(File stateDirectory,String mode)throws Exception{
+    private void synchronizeImageGenProviderSetting(File stateDirectory,String mode,String comfyUrl)throws Exception{
         File settingsFile=new File(stateDirectory,"anima-settings.json");
         if(!settingsFile.isFile())return;
         if(settingsFile.length()<=0||settingsFile.length()>2*1024*1024)throw new IllegalStateException("기존 Image Studio 설정 파일 크기가 올바르지 않습니다.");
         byte[] bytes=java.nio.file.Files.readAllBytes(settingsFile.toPath());
         org.json.JSONObject settings=new org.json.JSONObject(new String(bytes,StandardCharsets.UTF_8));
-        String provider="novelai".equals(mode)?"nai":"sdxl";
+        String savedWorkflow=settings.optString("imageProvider","sdxl");
+        String provider="novelai".equals(mode)?"nai":("anima".equalsIgnoreCase(savedWorkflow)?"anima":"sdxl");
         settings.put("imageProvider",provider);
+        settings.put("comfyUrl",comfyUrl);
         // Credentials are supplied by Android Keystore, never persisted here.
         settings.put("naiToken","");
         File temporary=new File(stateDirectory,"anima-settings.json.tmp");
@@ -2398,13 +2848,24 @@ public class MainActivity extends Activity {
         intent.putExtra(ImageGenService.EXTRA_BACKEND_VERSION, version);
         intent.putExtra(ImageGenService.EXTRA_LAUNCH_MODE, launchMode);
         intent.putExtra(ImageGenService.EXTRA_COMFY_URL, comfyUrl==null?"":comfyUrl);
+        JSONObject startDetails = new JSONObject();
+        try {
+            startDetails.put("backendVersion", version == null ? "" : version);
+            startDetails.put("launchMode", launchMode == null ? "default" : launchMode);
+            startDetails.put("installTargetRelativePath", "imagegen/backend");
+            startDetails.put("androidRelease", android.os.Build.VERSION.RELEASE == null ? "unknown" : android.os.Build.VERSION.RELEASE);
+            startDetails.put("androidSdk", android.os.Build.VERSION.SDK_INT);
+        } catch (Exception ignored) {}
+        DiagnosticsLogger.event(this, "INFO", "imagegen_service", "imagegen_service_start_requested", startDetails);
         try {
             if (android.os.Build.VERSION.SDK_INT >= 26) startForegroundService(intent);
             else startService(intent);
             imageGenSessionMessage = "Wayward ImageGen " + version + " 서버 시작 요청을 전달했습니다.";
             refreshImageGenStatus();
         } catch (Throwable error) {
-            DiagnosticsLogger.error(this,"imagegen","service_start_request_failed",error);
+            try { startDetails.put("stage", "dispatch_foreground_service"); } catch (Exception ignored) {}
+            DiagnosticsLogger.error(this, "imagegen_service", "imagegen_service_start_failed", error, startDetails);
+            DiagnosticsLogger.event(this, "ERROR", "imagegen", "service_start_request_failed", startDetails);
             String message = error.getMessage() == null ? error.getClass().getSimpleName() : error.getMessage();
             imageGenSessionMessage = "이미지 서버 시작 요청 실패: " + message;
             try {
@@ -2495,6 +2956,7 @@ public class MainActivity extends Activity {
         super.onBackPressed();
     }
     @Override protected void onDestroy(){
+        RemoteHostRevocationMonitor.stop(this);
         String sessionId=sessionProfileId(getIntent());
         if(sessionId!=null)logGameLifecycle("INFO","game_session_destroyed",sessionId,
                 activeGameLaunchRequestId,"onDestroy");
@@ -2697,6 +3159,10 @@ public class MainActivity extends Activity {
         }
         @JavascriptInterface public void imageGenProxyFetch(String requestId,String method,String path,String headersJson,String bodyBase64){
             boolean remotePcMode=IMAGE_MODE_REMOTE_PC.equals(currentImageMode());
+            if(!remotePcMode&&path!=null&&path.startsWith("/api/nai-compat/")){
+                NovelAiRequestProxy.dispatch(web,requestId,method,path,headersJson,bodyBase64);
+                return;
+            }
             ImageGenProxy.dispatch(web,requestId,method,path,headersJson,bodyBase64,remotePcMode);
         }
         @JavascriptInterface public String imageGenRuntimeStatus(){
@@ -2712,7 +3178,7 @@ public class MainActivity extends Activity {
                     value.put("backendVersion","remote-pc:v1");
                     value.put("engine","remote-pc");
                     value.put("message",ready?"페어링된 PC Remote Host를 사용합니다.":"PC 페어링과 승인된 폴더 선택이 필요합니다.");
-                }else{
+                }else if(IMAGE_MODE_GENERATION.equals(currentImageMode())){
                     value.put("available",state.isAvailable());
                     value.put("starting",state.isStarting());
                     value.put("ready",state.isReady());
@@ -2720,6 +3186,13 @@ public class MainActivity extends Activity {
                     String[] parts=state.backendVersion.split(":");
                     value.put("engine",parts.length>=3?parts[2]:"unknown");
                     value.put("message",state.message);
+                }else{
+                    value.put("available",false);
+                    value.put("starting",false);
+                    value.put("ready",false);
+                    value.put("backendVersion","");
+                    value.put("engine","off");
+                    value.put("message","런처에서 이미지팩 전용 모드를 선택했습니다.");
                 }
                 return value.toString();
             }catch(Exception ignored){return "{\"available\":false,\"starting\":false,\"ready\":false,\"backendVersion\":\"\",\"engine\":\"unknown\"}";}
@@ -2770,8 +3243,16 @@ public class MainActivity extends Activity {
             if(path==null)return response(400,"Bad Request","text/plain","Invalid local image path");
             String filePath="images/"+path;
             try{
-                InputStream in=tree==null?null:tree.openImage(filePath);
-                if(in==null&&zipMods!=null)in=zipMods.open(filePath);
+                InputStream in=null;
+                try{in=tree==null?null:tree.openImage(filePath);}catch(Exception ignored){}
+                if(in==null&&zipMods!=null){
+                    for(String modId:zipMods.listModIds()){
+                        try{
+                            in=zipMods.open("wml/mods/"+modId+"/"+filePath);
+                            if(in!=null)break;
+                        }catch(Exception ignored){}
+                    }
+                }
                 if(in==null)return null;
                 String m=mime(filePath);
                 return new WebResourceResponse(m,text(m)?"UTF-8":null,200,"OK",headers(filePath),in);

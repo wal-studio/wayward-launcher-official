@@ -78,7 +78,8 @@ else:
 
 print("PASS: Android WebView chooser diagnostics correlate numeric MODE_OPEN_MULTIPLE requests, native results, and one callback per pack.json/ZIP request.")
 `;
-execFileSync("python3", ["-c", chooserSemanticRegression], { encoding: "utf8" });
+const pythonCommand = process.platform === "win32" ? "python" : "python3";
+execFileSync(pythonCommand, ["-c", chooserSemanticRegression], { encoding: "utf8" });
 
 const helper = readFileSync(new URL("../app/src/main/java/com/wayward/launcher/ImagePackFolderPickerScript.java", import.meta.url), "utf8");
 const acceptance = readFileSync(new URL("../app/src/debug/java/com/wayward/launcher/ImagePackPickerAcceptanceActivity.java", import.meta.url), "utf8");

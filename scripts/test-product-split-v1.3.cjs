@@ -35,6 +35,7 @@ assert.match(validationWorkflow,/SIGNING SKIP/);
 assert.match(validationWorkflow,/Get-VariantApk/);
 assert.match(validationWorkflow,/uses: actions\/upload-artifact@v4/);
 assert.match(validationWorkflow,/wal-android-product-validation-apks/);
+assert.match(validationWorkflow,/gradle\.properties/);
 assert.match(validationWorkflow,/SM-S938N physical test: SKIPPED/);
 assert.match(validationWorkflow,/SM-S938N physical test: PARTIAL PASS/);
 assert.match(validationWorkflow,/SM-S938N physical test: PASS/);
@@ -62,3 +63,5 @@ assert.match(providerPaths,/name="updates" path="updates\//);
 console.log('WAL Android product split v1.3 contract checks passed');
 
 // Trigger a fresh validation run after the workflow self-trigger correction.
+
+// Revalidation trigger: dual stable-release feed and URL allowlist are now covered.

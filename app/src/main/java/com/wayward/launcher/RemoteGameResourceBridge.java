@@ -23,9 +23,11 @@ final class RemoteGameResourceBridge {
         HttpsURLConnection connection = null;
         RemoteResourceCache.FetchFlight flight = null;
         RemoteResourceCache.CacheEntry offlineFallback = null;
+        RemoteHostConnection host = null;
         try {
-            RemoteHostConnection host = RemoteHostStore.loadConnection(context);
-            if (host == null) return error(503, "Service Unavailable", "PC Host가 등록되지 않았습니다.");
+            host = RemoteHostStore.loadConnection(context);
+            if (host == null || !RemoteHostStore.isPaired(context))
+                return error(403, "Forbidden", "PC 페어링이 유효하지 않습니다.");
             String rootId = RemoteHostStore.getSelectedRootId(context);
             if (rootId == null || rootId.isEmpty()) {
                 return error(503, "Service Unavailable", "PC 게임 폴더를 먼저 선택하세요.");
@@ -144,7 +146,12 @@ final class RemoteGameResourceBridge {
             return new WebResourceResponse(mime, encoding, status, reasonPhrase(status), responseHeaders, body);
         } catch (Exception error) {
             if (flight != null) flight.complete(false);
-            if (offlineFallback != null &&
+            if (RemoteHostClient.isDeviceRevokedError(error)) {
+                // Keep pairing cleanup in the lifecycle-owned SSE monitor so its UI
+                // notification and generation check remain atomic with the revoke event.
+                return error(403,"Forbidden","PC에서 이 기기의 페어링을 해제했습니다.");
+            }
+            if (RemoteHostStore.isPaired(context) && offlineFallback != null &&
                     (error instanceof IOException || error instanceof java.net.SocketTimeoutException)) {
                 if (diagnostics != null && diagnostics.getAndIncrement() < 16) {
                     android.util.Log.w("WaywardRemotePlay", "Serving a previously verified cached image after Host network loss.");
@@ -240,7 +247,7 @@ final class RemoteGameResourceBridge {
     }
 
     private static String normalizeImagePath(String rawPath) throws IOException {
-        if (rawPath == null || !rawPath.startsWith("/images/") ||
+        if (rawPath == null || !rawPath.startsWith("/images/__wayward_generated__/") ||
                 rawPath.contains("\\") || rawPath.startsWith("//")) {
             throw new IOException("Invalid remote image path.");
         }

@@ -43,6 +43,7 @@ final class RemoteHostClient {
     private static volatile String sessionHostId = "";
     private static volatile String accessToken = "";
     private static volatile long tokenExpiresAtMillis;
+    private static volatile long sessionRegisteredAtUtcMillis;
 
     private RemoteHostClient() {}
 
@@ -51,12 +52,89 @@ final class RemoteHostClient {
             sessionHostId = "";
             accessToken = "";
             tokenExpiresAtMillis = 0L;
+            sessionRegisteredAtUtcMillis = 0L;
         }
     }
 
     static boolean hasSession(RemoteHostConnection host) {
         return host != null && host.hostId.equals(sessionHostId) &&
                 !accessToken.isEmpty() && tokenExpiresAtMillis > System.currentTimeMillis() + 30_000L;
+    }
+
+    static HttpsURLConnection openRevocationEvents(Context context,RemoteHostConnection host) throws Exception {
+        return openRevocationEvents(context,host,false);
+    }
+
+    private static HttpsURLConnection openRevocationEvents(Context context,RemoteHostConnection host,boolean retriedAuth) throws Exception {
+        String token=authenticate(context,host);
+        Map<String,String> headers=new java.util.HashMap<>();
+        headers.put("Accept","text/event-stream");
+        headers.put("Cache-Control","no-cache");
+        IOException lastNetworkError=null;
+        for(String endpoint:endpointCandidates(host)){
+            HttpsURLConnection connection=createPinnedConnection(endpoint,host.certificateSha256,
+                    "/v1/device/events","GET",null,"Bearer "+token,headers);
+            connection.setReadTimeout(0);
+            try{
+                connection.connect();
+                int status=connection.getResponseCode();
+                if(status==200){
+                    String contentType=connection.getContentType();
+                    String cacheControl=connection.getHeaderField("Cache-Control");
+                    if(contentType==null||!contentType.toLowerCase(Locale.ROOT).startsWith("text/event-stream")){
+                        connection.disconnect();
+                        throw new SecurityException("Revocation stream must use text/event-stream.");
+                    }
+                    if(cacheControl==null||!cacheControl.toLowerCase(Locale.ROOT).contains("no-store")){
+                        connection.disconnect();
+                        throw new SecurityException("Revocation stream must disable caching.");
+                    }
+                    return connection;
+                }
+                InputStream errorStream=connection.getErrorStream();
+                byte[] bytes=readLimited(errorStream,64*1024);
+                String body=new String(bytes,StandardCharsets.UTF_8);
+                java.util.Arrays.fill(bytes,(byte)0);
+                connection.disconnect();
+                if(status==401&&!retriedAuth&&!isRevocationErrorBody(body)){
+                    clearSession();
+                    return openRevocationEvents(context,host,true);
+                }
+                throw new IOException("Host API returned HTTP "+status+": "+body);
+            }catch(IOException error){
+                connection.disconnect();
+                if(error.getMessage()!=null&&error.getMessage().startsWith("Host API returned HTTP "))throw error;
+                if(error instanceof javax.net.ssl.SSLException ||
+                        !(error instanceof java.net.ConnectException ||
+                          error instanceof java.net.NoRouteToHostException ||
+                          error instanceof java.net.UnknownHostException ||
+                          error instanceof java.net.SocketTimeoutException ||
+                          error instanceof java.net.SocketException))throw error;
+                lastNetworkError=error;
+            }
+        }
+        if(lastNetworkError!=null)throw lastNetworkError;
+        throw new IOException("No trusted Remote Host endpoint is available for revocation events.");
+    }
+
+    static boolean isDeviceRevokedError(Throwable error){
+        for(Throwable current=error;current!=null;current=current.getCause()){
+            if(current instanceof RemoteHostDeviceRevokedException)return true;
+            String message=current.getMessage();
+            if(message==null)continue;
+            int start=message.indexOf('{');
+            if(start<0)continue;
+            if(isRevocationErrorBody(message.substring(start)))return true;
+        }
+        return false;
+    }
+
+    private static boolean isRevocationErrorBody(String body){
+        try{
+            JSONObject value=new JSONObject(body);
+            String code=value.optString("error","");
+            return "device_not_paired".equalsIgnoreCase(code)||"DeviceRevoked".equalsIgnoreCase(code);
+        }catch(Exception ignored){return false;}
     }
 
     static JSONObject requestJson(RemoteHostConnection host, String path, String method,
@@ -110,19 +188,10 @@ final class RemoteHostClient {
             throw new SecurityException("mDNS 주소에서 응답한 HTTPS Host가 기존 등록 Host와 다릅니다.");
         }
 
-        String query = "/v1/host/qr?address=" + URLEncoder.encode(address, "UTF-8");
-        JSONObject qr = requestJsonPinned(baseUrl, trustedHost.certificateSha256,
-                query, "GET", null, null);
-        RemoteHostConnection refreshed = RemoteHostConnection.fromQrJson(qr.toString());
-        refreshed.verifySignedManifest();
-        if (!refreshed.hostId.equalsIgnoreCase(trustedHost.hostId) ||
-                !refreshed.certificateSha256.equalsIgnoreCase(trustedHost.certificateSha256) ||
-                !refreshed.publicKeyFingerprint.equalsIgnoreCase(trustedHost.publicKeyFingerprint) ||
-                !refreshed.publicKeyBase64.equals(trustedHost.publicKeyBase64) ||
-                !refreshed.baseUrl.equalsIgnoreCase(baseUrl)) {
-            throw new SecurityException("새 IP 주소가 기존 Host Identity 및 서명된 연결 매니페스트와 일치하지 않습니다.");
-        }
-        return refreshed;
+        // mDNS can update only the LAN route. It cannot create a new pairing QR or
+        // replace the signed Host identity; the previously stored QR remains the trust anchor.
+        trustedHost.updateLanBaseUrl(baseUrl);
+        return trustedHost;
     }
 
     private static void verifyIdentityResponse(RemoteHostConnection host, JSONObject identity) throws Exception {
@@ -195,8 +264,9 @@ final class RemoteHostClient {
                     }
                     byte[] receiptPayload = Base64.decode(receipt.getString("signedPayloadBase64"), Base64.DEFAULT);
                     byte[] receiptSignature = Base64.decode(receipt.getString("signatureBase64"), Base64.DEFAULT);
+                    long registeredAtUtcMillis;
                     try {
-                        host.verifyPairingApprovalReceipt(
+                        registeredAtUtcMillis=host.verifyPairingApprovalReceipt(
                                 receiptPayload, receiptSignature, requestId, deviceId,
                                 expectedDeviceFingerprint, approvedPermissions);
                     } finally {
@@ -204,8 +274,8 @@ final class RemoteHostClient {
                         java.util.Arrays.fill(receiptSignature, (byte) 0);
                     }
                     Log.i(PAIRING_TAG, "stage=user_approval_wait result=approved");
-                    authenticate(context, host);
-                    RemoteHostStore.markPaired(context,host);
+                    authenticate(context, host, registeredAtUtcMillis);
+                    RemoteHostStore.markPaired(context,host,registeredAtUtcMillis);
                     Log.i(PAIRING_TAG, "stage=pairing_registration result=success");
                     return "PC Manager에서 기기 승인이 완료되었습니다.\nHost ID: " + host.hostId +
                             "\nDevice ID: " + deviceId +
@@ -224,9 +294,21 @@ final class RemoteHostClient {
     }
 
     static String authenticate(Context context, RemoteHostConnection host) throws Exception {
+        return authenticate(context,host,RemoteHostStore.getPairedRegisteredAtUtc(context));
+    }
+
+    static String authenticate(Context context,RemoteHostConnection host,long expectedRegisteredAtUtcMillis) throws Exception {
         synchronized (SESSION_LOCK) {
             if (host.hostId.equals(sessionHostId) && !accessToken.isEmpty() &&
-                    tokenExpiresAtMillis > System.currentTimeMillis() + 60_000L) {
+                    tokenExpiresAtMillis > System.currentTimeMillis() + 60_000L &&
+                    (expectedRegisteredAtUtcMillis<=0L||sessionRegisteredAtUtcMillis==expectedRegisteredAtUtcMillis)) {
+                if (host.wanBaseUrl == null || host.wanBaseUrl.isEmpty()) {
+                    try { refreshWanEndpointWithToken(context, host, accessToken); }
+                    catch (Exception endpointError) {
+                        Log.w(PAIRING_TAG, "stage=wan_endpoint_refresh result=unavailable error=" +
+                                endpointError.getClass().getSimpleName());
+                    }
+                }
                 return accessToken;
             }
 
@@ -243,7 +325,7 @@ final class RemoteHostClient {
             byte[] hostSignature = Base64.decode(challenge.getString("hostSignatureBase64"), Base64.DEFAULT);
             byte[] deviceSignature = null;
             try {
-                host.verifyHostSignature(payload, hostSignature);
+                host.verifyDeviceAuthChallenge(payload,hostSignature,deviceId);
                 deviceSignature = signDevicePayload(deviceKey, payload);
                 JSONObject complete = requestJson(host,
                         "/v1/auth/challenges/" + challenge.getString("challengeId") + "/complete",
@@ -252,13 +334,36 @@ final class RemoteHostClient {
                                 Base64.encodeToString(deviceSignature, Base64.NO_WRAP)),
                         null);
                 String newToken = complete.getString("accessToken");
+                JSONObject authenticatedDevice=requestJson(host,"/v1/auth/session","GET",null,"Bearer "+newToken);
+                if(!deviceId.equalsIgnoreCase(authenticatedDevice.getString("deviceId")))
+                    throw new SecurityException("Authenticated session belongs to a different Device ID.");
+                long registeredAtUtcMillis=Instant.parse(authenticatedDevice.getString("registeredAtUtc")).toEpochMilli();
+                if(registeredAtUtcMillis<=0L||registeredAtUtcMillis>System.currentTimeMillis()+5*60_000L)
+                    throw new SecurityException("Authenticated session registration timestamp is invalid.");
+                if(expectedRegisteredAtUtcMillis>0L&&registeredAtUtcMillis!=expectedRegisteredAtUtcMillis)
+                    throw new RemoteHostDeviceRevokedException("The paired registration generation has been revoked or replaced.");
                 long expires = Instant.parse(complete.getString("expiresAtUtc")).toEpochMilli();
                 if (expires <= System.currentTimeMillis() || expires > System.currentTimeMillis() + 20 * 60_000L) {
                     throw new SecurityException("PC Host가 유효하지 않은 Session 만료 시간을 반환했습니다.");
                 }
+                if(expectedRegisteredAtUtcMillis<=0L&&RemoteHostStore.isPaired(context)){
+                    if(!RemoteHostStore.saveMigratedRegisteredAt(context,host.hostId,registeredAtUtcMillis))
+                        throw new IOException("기존 PC 페어링 등록 시각을 안전하게 보완하지 못했습니다.");
+                }
                 accessToken = newToken;
                 sessionHostId = host.hostId;
                 tokenExpiresAtMillis = expires;
+                sessionRegisteredAtUtcMillis=registeredAtUtcMillis;
+                if (host.wanBaseUrl == null || host.wanBaseUrl.isEmpty()) {
+                    try {
+                        refreshWanEndpointWithToken(context, host, newToken);
+                    } catch (Exception endpointError) {
+                        // WAN mapping may be unsupported or temporarily unavailable. Keep the
+                        // verified LAN route and the existing Host/device trust state unchanged.
+                        Log.w(PAIRING_TAG, "stage=wan_endpoint_refresh result=unavailable error=" +
+                                endpointError.getClass().getSimpleName());
+                    }
+                }
                 Log.i(PAIRING_TAG, "stage=pc_session_auth result=success");
                 return accessToken;
             } finally {
@@ -267,6 +372,30 @@ final class RemoteHostClient {
                 if (deviceSignature != null) java.util.Arrays.fill(deviceSignature, (byte) 0);
             }
         }
+    }
+
+    static void refreshWanEndpoint(Context context, RemoteHostConnection host) throws Exception {
+        boolean hadWanEndpoint = host.wanBaseUrl != null && !host.wanBaseUrl.isEmpty();
+        String token = authenticate(context, host);
+        if (hadWanEndpoint) refreshWanEndpointWithToken(context, host, token);
+    }
+
+    private static void refreshWanEndpointWithToken(Context context, RemoteHostConnection host,
+            String token) throws Exception {
+        JSONObject endpoint = requestJson(host, "/v1/host/connection", "GET", null, "Bearer " + token);
+        if (!host.hostId.equalsIgnoreCase(endpoint.getString("hostId")) ||
+                !host.certificateSha256.equalsIgnoreCase(endpoint.getString("certificateSha256"))) {
+            throw new SecurityException("Authenticated WAN endpoint metadata belongs to a different Host or TLS certificate.");
+        }
+        String baseUrl = RemoteHostConnection.normalizeWanBaseUrl(endpoint.getString("baseUrl"));
+        long expires = Instant.parse(endpoint.getString("leaseExpiresAtUtc")).toEpochMilli();
+        if (expires <= System.currentTimeMillis() + 5_000L ||
+                expires > System.currentTimeMillis() + 10 * 60_000L) {
+            throw new SecurityException("Host WAN endpoint lease expiry is outside the expected finite window.");
+        }
+        host.updateWanBaseUrl(baseUrl);
+        RemoteHostStore.saveConnection(context, host);
+        Log.i(PAIRING_TAG, "stage=wan_endpoint_refresh result=success");
     }
 
     static JSONArray getWorkspaceRoots(Context context, RemoteHostConnection host) throws Exception {
@@ -296,7 +425,9 @@ final class RemoteHostClient {
                 encodedRelativePath.endsWith("/..")) {
             throw new IOException("원격 게임 리소스 경로가 올바르지 않습니다.");
         }
-        String path = "/v1/game" + encodedRelativePath + "?rootId=" +
+        String apiPrefix = encodedRelativePath.startsWith("/images/__wayward_generated__/")
+                ? "/v1/game-image-api" : "/v1/game";
+        String path = apiPrefix + encodedRelativePath + "?rootId=" +
                 URLEncoder.encode(rootId, "UTF-8");
         String token = authenticate(context, host);
         HttpsURLConnection connection = openPinned(host, path, "GET", null, "Bearer " + token, requestHeaders);
@@ -330,10 +461,104 @@ final class RemoteHostClient {
         JSONObject response = requestJsonEnvelope(host, path, method, body, "Bearer " + token);
         if (response.optInt("status", 0) == HttpURLConnection.HTTP_UNAUTHORIZED) {
             clearSession();
-            token = authenticate(context, host);
+            try {
+                token = authenticate(context, host);
+            } catch (Exception authError) {
+                if (isDeviceRevokedError(authError)) return response;
+                throw authError;
+            }
             response = requestJsonEnvelope(host, path, method, body, "Bearer " + token);
         }
         return response;
+    }
+
+    /** Sends an already-validated JSON payload without parsing or reserializing its bytes. */
+    static JSONObject requestAuthenticatedRawJsonEnvelope(Context context,RemoteHostConnection host,
+            String path,String method,byte[] bodyBytes) throws Exception {
+        return requestAuthenticatedRawJsonEnvelope(context,host,path,method,bodyBytes,null);
+    }
+
+    static JSONObject requestAuthenticatedRawJsonEnvelope(Context context,RemoteHostConnection host,
+            String path,String method,byte[] bodyBytes,Map<String,String> forwardedHeaders) throws Exception {
+        String token=authenticate(context,host);
+        JSONObject response=requestRawJsonEnvelope(host,path,method,bodyBytes,"Bearer "+token,forwardedHeaders);
+        if(response.optInt("status",0)==HttpURLConnection.HTTP_UNAUTHORIZED){
+            clearSession();
+            try{
+                token=authenticate(context,host);
+            }catch(Exception authError){
+                if(isDeviceRevokedError(authError))return response;
+                throw authError;
+            }
+            response=requestRawJsonEnvelope(host,path,method,bodyBytes,"Bearer "+token,forwardedHeaders);
+        }
+        return response;
+    }
+
+    private static JSONObject requestRawJsonEnvelope(RemoteHostConnection host,String path,
+            String method,byte[] bodyBytes,String authorization,Map<String,String> forwardedHeaders) throws Exception {
+        HttpsURLConnection connection=openPinnedRaw(host,path,method,bodyBytes,authorization,forwardedHeaders);
+        try{
+            int status=connection.getResponseCode();
+            InputStream stream=status>=200&&status<300?connection.getInputStream():connection.getErrorStream();
+            byte[] bytes=readLimited(stream,MAX_JSON_RESPONSE_BYTES);
+            try{
+                JSONObject headers=new JSONObject();
+                for(String name:new String[]{"Content-Type","Cache-Control","Retry-After","ETag"}){
+                    String value=connection.getHeaderField(name);
+                    if(value!=null)headers.put(name,value);
+                }
+                return new JSONObject()
+                        .put("status",status)
+                        .put("statusText",connection.getResponseMessage()==null?"":connection.getResponseMessage())
+                        .put("headers",headers)
+                        .put("bodyBase64",android.util.Base64.encodeToString(bytes,android.util.Base64.NO_WRAP));
+            }finally{java.util.Arrays.fill(bytes,(byte)0);}
+        }finally{connection.disconnect();}
+    }
+
+    private static HttpsURLConnection openPinnedRaw(RemoteHostConnection host,String path,
+            String method,byte[] bodyBytes,String authorization,Map<String,String> forwardedHeaders) throws Exception {
+        String[] endpoints=endpointCandidates(host);
+        IOException lastNetworkError=null;
+        for(String endpoint:endpoints){
+            HttpsURLConnection connection=createPinnedConnection(endpoint,host.certificateSha256,
+                    path,method,null,authorization,forwardedHeaders);
+            if(bodyBytes!=null&&bodyBytes.length>0){
+                connection.setDoOutput(true);
+                connection.setRequestProperty("Content-Type","application/json; charset=utf-8");
+                connection.setFixedLengthStreamingMode(bodyBytes.length);
+            }
+            try{
+                connection.connect();
+            }catch(IOException error){
+                connection.disconnect();
+                if(error instanceof javax.net.ssl.SSLException||
+                        !(error instanceof java.net.ConnectException||
+                          error instanceof java.net.NoRouteToHostException||
+                          error instanceof java.net.UnknownHostException||
+                          error instanceof java.net.SocketTimeoutException||
+                          error instanceof java.net.SocketException))throw error;
+                lastNetworkError=error;
+                continue;
+            }
+            try{
+                if(bodyBytes!=null&&bodyBytes.length>0){
+                    try(OutputStream output=connection.getOutputStream()){
+                        output.write(bodyBytes);
+                        output.flush();
+                    }
+                }
+                return connection;
+            }catch(IOException error){
+                connection.disconnect();
+                // Once connected, the request may have reached the Host. Never replay it
+                // against another endpoint after a body-write failure.
+                throw error;
+            }
+        }
+        if(lastNetworkError!=null)throw lastNetworkError;
+        throw new IOException("No trusted Remote Host endpoint is available.");
     }
 
     private static JSONObject requestJsonEnvelope(RemoteHostConnection host, String path,
@@ -469,8 +694,12 @@ final class RemoteHostClient {
     }
 
     static String[] endpointCandidates(RemoteHostConnection host) {
-        if (host == null) throw new IllegalArgumentException("Trusted LAN Host is required.");
-        return new String[] {host.baseUrl};
+        if (host == null) throw new IllegalArgumentException("Trusted Remote Host is required.");
+        java.util.LinkedHashSet<String> candidates = new java.util.LinkedHashSet<>();
+        if (host.wanBaseUrl != null && !host.wanBaseUrl.isEmpty()) candidates.add(host.wanBaseUrl);
+        if (host.lanBaseUrl != null && !host.lanBaseUrl.isEmpty()) candidates.add(host.lanBaseUrl);
+        candidates.add(host.baseUrl);
+        return candidates.toArray(new String[0]);
     }
 
     private static HttpsURLConnection openPinned(RemoteHostConnection host, String path,

@@ -54,6 +54,9 @@ jobs:
         with:
           node-version: '20'
 
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@v2
+
       - name: Embed pinned NovelAI image-generation backend
         shell: bash
         run: |
@@ -120,6 +123,18 @@ jobs:
         run: |
           node tests/novelai-provider-lock.test.mjs
           node tests/novelai-token-persistence.test.mjs
+
+      - name: Test merged image-generation, diagnostics, update and CDN contracts
+        run: |
+          node tests/imagegen-generation-fidelity.contract.test.cjs
+          node tests/novelai-direct-api-proxy.contract.test.cjs
+          node tests/imagegen-backend-bundle-integrity.test.cjs
+          node tests/default-character-cdn-fallback.contract.test.cjs
+          node tests/diagnostics-consent-contract.test.mjs
+          node tests/diagnostics-retention.test.mjs
+          node tests/imagegen-diagnostics-contract.test.mjs
+          node tests/official-update-contract.test.mjs
+          bun tests/nai-generation-payload.test.ts
 
       - name: Test image server switch ordering
         run: |

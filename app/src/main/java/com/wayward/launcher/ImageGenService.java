@@ -95,7 +95,20 @@ public final class ImageGenService extends Service {
         }
 
         String backendPath = intent == null ? null : intent.getStringExtra(EXTRA_BACKEND_ROOT);
+        JSONObject receivedDetails = new JSONObject();
+        try {
+            receivedDetails.put("backendPathPresent", backendPath != null && !backendPath.isEmpty());
+            receivedDetails.put("backendVersion", intent == null ? "" : intent.getStringExtra(EXTRA_BACKEND_VERSION));
+        } catch (Exception ignored) {}
+        DiagnosticsLogger.event(this, "INFO", "imagegen_service", "imagegen_service_start_received", receivedDetails);
         if (backendPath == null || backendPath.isEmpty()) {
+            JSONObject missingPathDetails = new JSONObject();
+            try {
+                missingPathDetails.put("stage", "validate_backend_path");
+                missingPathDetails.put("installTargetRelativePath", "imagegen/backend");
+            } catch (Exception ignored) {}
+            DiagnosticsLogger.error(this, "imagegen_service", "imagegen_service_start_failed",
+                    new IllegalStateException("ImageGen 백엔드 경로가 전달되지 않았습니다."), missingPathDetails);
             statusMessage = "ImageGen 백엔드 경로가 전달되지 않았습니다.";
             starting = false;
             serverReady = false;
@@ -127,6 +140,10 @@ public final class ImageGenService extends Service {
                 }
             });
         } catch (Throwable error) {
+            JSONObject startFailureDetails = new JSONObject();
+            try { startFailureDetails.put("stage", "foreground_service_start"); } catch (Exception ignored) {}
+            DiagnosticsLogger.error(this, "imagegen_service", "imagegen_service_start_failed",
+                    error, startFailureDetails);
             recordFailure(error);
             stopSelf(startId);
             return START_NOT_STICKY;
@@ -173,7 +190,14 @@ public final class ImageGenService extends Service {
     }
 
     private void recordFailure(Throwable error) {
-        DiagnosticsLogger.error(this,"imagegen_service","runtime_start_failed",error);
+        JSONObject failureDetails = new JSONObject();
+        try {
+            failureDetails.put("stage", "runtime_start");
+            failureDetails.put("backendVersion", backendVersion);
+            failureDetails.put("installTargetRelativePath", "imagegen/backend");
+        } catch (Exception ignored) {}
+        DiagnosticsLogger.error(this, "imagegen_service", "imagegen_runtime_start_failed", error, failureDetails);
+        DiagnosticsLogger.event(this, "ERROR", "imagegen_service", "runtime_start_failed", failureDetails);
         serverReady = false;
         serverAvailable = false;
         starting = false;

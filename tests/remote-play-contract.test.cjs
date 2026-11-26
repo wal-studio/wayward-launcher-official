@@ -4,11 +4,13 @@ const fs = require('node:fs');
 const read = path => fs.readFileSync(path, 'utf8');
 const main = read('app/src/main/java/com/wayward/launcher/MainActivity.java');
 const client = read('app/src/main/java/com/wayward/launcher/RemoteHostClient.java');
+const revocationMonitor = read('app/src/main/java/com/wayward/launcher/RemoteHostRevocationMonitor.java');
 const connection = read('app/src/main/java/com/wayward/launcher/RemoteHostConnection.java');
 const store = read('app/src/main/java/com/wayward/launcher/RemoteHostStore.java');
 const discovery = read('app/src/main/java/com/wayward/launcher/RemoteHostDiscovery.java');
 const bridge = read('app/src/main/java/com/wayward/launcher/RemoteGameResourceBridge.java');
 const resourceCache = read('app/src/main/java/com/wayward/launcher/RemoteResourceCache.java');
+const remoteResourceBridge = read('app/src/main/java/com/wayward/launcher/RemoteGameResourceBridge.java');
 const comfy = read('app/src/main/java/com/wayward/launcher/RemoteComfyClient.java');
 const remoteImageApi = read('app/src/main/java/com/wayward/launcher/RemoteGameImageApiClient.java');
 const imageProxy = read('app/src/main/java/com/wayward/launcher/ImageGenProxy.java');
@@ -49,12 +51,14 @@ assert.match(connection, /certificateSha256/,
   'the signed Host manifest must bind the TLS certificate fingerprint');
 assert.match(connection, /isPrivateLanIpv4\(uri\.getHost\(\)\)/,
   'every signed Host URL must be restricted to an RFC1918 LAN IPv4 address');
-assert.match(client, /return new String\[\] \{host\.baseUrl\}/,
-  'Remote Host requests must use the single LAN endpoint without external fallback');
+assert.ok(client.includes("candidates.add(host.wanBaseUrl)") &&
+  client.includes("candidates.add(host.lanBaseUrl)") &&
+  client.includes("candidates.add(host.baseUrl)"),
+  'Remote Host requests must use only the authenticated WAN route, discovered LAN route and original signed QR route');
 assert.doesNotMatch(connection, /normalizeExternalBaseUrl|isGloballyRoutableIpv4|externalTestEndpoint|externalBaseUrl|portMapping/,
   'public IPv4 and external QR implementation must be removed');
 assert.doesNotMatch(client, /externalBaseUrl/,
-  'the client must not retain an external endpoint fallback');
+  'the client must not accept an untrusted external endpoint outside the authenticated WAN metadata path');
 assert.match(client, /SSLException/,
   'TLS or certificate-pin failures must not trigger a fallback to another endpoint');
 assert.match(client, /writeRequestBody/,
@@ -163,6 +167,10 @@ assert.match(main, /ImageGenProxy\.dispatch\(web,requestId,method,path,headersJs
   'the existing WebView bridge must choose the remote transport from the selected image mode');
 assert.match(imageProxy, /if \(remotePcMode\)[\s\S]*?RemoteGameImageApiClient\.execute/,
   'Remote PC image API calls must use the native authenticated transport instead of the local ImageGen port');
+assert.doesNotMatch(imageProxy, /generation\.put\("workflow",\s*"illustrious"\)/,
+  'the launcher must not replace the game-selected workflow in the generation request');
+assert.match(imageProxy, /Preserve the game's complete generation payload byte-for-byte/,
+  'the local generation transport must preserve the original game payload without prompt or option rewriting');
 assert.match(imageProxy, /RemoteHostStore\.isReady\(appContext\)/,
   'Remote PC generation must require a paired Host and selected approved workspace root');
 assert.match(remoteImageApi, /\/v1\/game-image-api\/image\/generate/,
@@ -175,7 +183,7 @@ assert.match(remoteImageApi, /\/v1\/game-image-api\/batch\/enqueue/,
   'the original pre-generation batch endpoint must map to the authenticated PC Host adapter');
 assert.match(remoteImageApi, /\/v1\/game-image-api\/image\/status/,
   'the original game must be able to poll image completion on the PC Host');
-assert.match(remoteImageApi, /requestAuthenticatedJsonEnvelope/,
+assert.match(remoteImageApi, /requestAuthenticatedRawJsonEnvelope/,
   'Remote Host bearer tokens must stay inside native code and be returned as a response envelope only');
 assert.doesNotMatch(remoteImageApi, /put\("Authorization"|Bearer /,
   'game JavaScript must not receive or create the Remote Host bearer token');
@@ -262,13 +270,17 @@ assert.ok(signatureCheck >= 0 && identityCheck > signatureCheck && hostStore > i
   'Host signature and identity checks must complete before storing Host data');
 
 assert.ok(instrumented.includes("remoteHostRejectsNonPrivateOrCleartextQrUrls") &&
+  instrumented.includes("pairedWanEndpointIsStoredSeparatelyAndKeepsTheOriginalCertificatePin") &&
   connection.includes("!isPrivateLanIpv4(uri.getHost())") &&
-  client.includes("return new String[] {host.baseUrl}"),
-  'Android must reject non-LAN QR endpoints and retain one direct LAN endpoint only');
+  connection.includes("normalizeWanBaseUrl") &&
+  client.includes("candidates.add(host.wanBaseUrl)") &&
+  client.includes("candidates.add(host.lanBaseUrl)") &&
+  client.includes("candidates.add(host.baseUrl)"),
+  'Android must keep first-pairing QR LAN-only and store a separate authenticated WAN route with the same certificate pin');
 assert.doesNotMatch(connection, /externalBaseUrl|externalTestEndpoint|normalizeExternalBaseUrl|isGloballyRoutableIpv4|portMapping/,
-  'external endpoint parsing and public IPv4 validation code must be absent');
+  'only the explicit paired-device WAN validator is allowed; generic external QR/port-mapping fallback must remain absent');
 assert.doesNotMatch(client, /externalBaseUrl/,
-  'the client must not contain an external endpoint fallback');
+  'the client must not accept an unauthenticated externalBaseUrl field');
 
 assert.match(pairingActivity, /BitmapFactory\.Options[\s\S]*?inJustDecodeBounds = true[\s\S]*?inSampleSize = sampleSize/,
   'the developer QR importer must inspect dimensions and downsample before allocating the bitmap');
@@ -285,11 +297,77 @@ assert.ok(revokedClassifierStart >= 0,
   'the MainActivity revoked-device classifier must remain explicit and reviewable');
 const revokedClassifierEnd = main.indexOf("\n    }", revokedClassifierStart) + 6;
 const revokedClassifier = main.slice(revokedClassifierStart, revokedClassifierEnd);
-assert.ok(revokedClassifier.includes('new org.json.JSONObject(message.substring(jsonStart))'),
-  'revocation classification must parse the structured Host error body');
-assert.match(revokedClassifier, /DeviceRevoked/);
-assert.match(revokedClassifier, /device_not_paired/);
+assert.match(revokedClassifier, /RemoteHostClient\.isDeviceRevokedError/,
+  'MainActivity must delegate structured revocation classification to the authenticated Host client');
+assert.match(client, /RemoteHostDeviceRevokedException/);
+assert.match(client, /device_not_paired/);
+assert.match(client, /DeviceRevoked/);
+assert.match(client, /registeredAtUtc/);
+assert.match(client, /requestJson\(host,"\/v1\/auth\/session","GET",null,"Bearer "\+newToken\)/,
+  'the PC auth-session response is the source of the registration generation; the challenge/complete DTOs do not expose it');
+assert.match(connection, /verifyDeviceAuthChallenge/);
+assert.doesNotMatch(connection, /parseSignedLong\(text,"registered"\)/,
+  'Android must not expect an unsigned or nonexistent generation field in the PC-signed challenge payload');
+assert.match(client, /\/v1\/device\/events/);
+assert.match(revocationMonitor, /"revoked"\.equals\(eventName\)/);
+assert.match(revocationMonitor, /getString\("deviceId"\)/);
+assert.match(revocationMonitor, /getString\("registeredAtUtc"\)/);
+assert.match(main, /RemoteHostRevocationMonitor\.start/);
+assert.match(main, /RemoteHostRevocationMonitor\.stop/);
+assert.match(store, /KEY_PAIRED_REGISTERED_AT/);
+assert.match(store, /savedRegisteredAt!=registeredAtUtcMillis/,
+  'a delayed revocation must not clear a newer pairing generation');
 assert.doesNotMatch(revokedClassifier, /http 401|http 404/i,
   'generic HTTP 401/404 must never be treated as proof that a device was revoked');
 
+assert.match(main, /isPairedRemoteGeneratedImageRequest/,
+  'absolute PC image URLs must be accepted only through the paired Host authority and selected root');
+assert.match(main, /sameRemoteHostAuthority/);
+assert.match(client, /encodedRelativePath\.startsWith\("\/images\/__wayward_generated__\//,
+  'generated image bytes must use the dedicated game-image API route');
+assert.match(remoteImageApi, /removeCredentialFields\(body\)/,
+  'settings PUT must recursively scrub provider credentials before forwarding');
+for (const credential of ['naiToken','novelAiToken','token','apiKey','authorization','accessToken','refreshToken']) {
+  assert.ok(remoteImageApi.includes('"'+credential+'"') || remoteImageApi.toLowerCase().includes(credential.toLowerCase()),
+    'settings credential scrub must cover '+credential);
+}
+assert.match(remoteImageApi, /failureResponse\(Exception error\)/,
+  'local validation and transport failures must not be mislabeled as PC HTTP success or generic offline status');
+assert.match(remoteImageApi, /errorResponse\(413,"Payload Too Large"/);
+assert.match(remoteImageApi, /errorResponse\(403,"Forbidden"/);
+assert.match(imageProxy, /RemoteGameImageApiClient\.failureResponse\(error\)/,
+  'the native bridge must preserve the classified local failure status');
+assert.match(imageProxy, /new JSONObject\(headersJson\)/,
+  'the native bridge must pass the original WebView header map to the remote transport');
+assert.match(remoteImageApi, /forwardedHeaders\(requestHeaders\)/);
+assert.match(remoteImageApi, /String\[\] allowed=\{"Range","If-Range","If-None-Match","If-Modified-Since"/,
+  'only the established safe conditional/range/cache headers may cross the pairing boundary');
+assert.match(client, /requestRawJsonEnvelope\(host,path,method,bodyBytes,"Bearer "\+token,forwardedHeaders\)/);
+assert.match(remoteImageApi, /requestAuthenticatedRawJsonEnvelope/,
+  'non-settings JSON requests must retain their exact original request bytes');
+assert.match(client, /requestRawJsonEnvelope/);
+assert.match(client, /setFixedLengthStreamingMode\(bodyBytes\.length\)/);
+assert.match(client, /if\(isDeviceRevokedError\(authError\)\)return response/,
+  'a revoked-generation 401 must remain the original PC response envelope');
+assert.match(remoteImageApi, /generation\/select-models-folder/);
+assert.match(remoteImageApi, /getQueryParameter\("jobId"\)/,
+  'batch status and control calls must retain their optional job identifier');
+assert.match(remoteImageApi, /128 \* 1024/);
+assert.match(remoteImageApi, /2 \* 1024 \* 1024/);
+assert.match(imageProxy, /RemoteGameImageApiClient\.unsupportedNaiResponse/,
+  'NovelAI checks must be answered locally rather than forwarded to the PC');
+assert.match(remoteImageApi, /put\("supported",false\)[\s\S]*?put\("configured",false\)[\s\S]*?put\("error","unsupported_provider"\)/,
+  'the local NAI 501 response must match the PC unsupported_provider contract without sending credentials');
+assert.match(remoteResourceBridge, /rawPath\.startsWith\("\/images\/__wayward_generated__\//,
+  'the paired image bridge must never become a general PC filesystem/image proxy');
+assert.match(remoteResourceBridge, /host == null \|\| !RemoteHostStore\.isPaired\(context\)/,
+  'remote image cache reads require an active permanent pairing, not only leftover Host/root metadata');
+assert.match(remoteResourceBridge, /RemoteHostStore\.isPaired\(context\) && offlineFallback != null/,
+  'transient network fallback must not serve cached images after local pairing has been cleared');
+assert.match(remoteResourceBridge, /RemoteHostClient\.isDeviceRevokedError\(error\)/,
+  'an explicit PC pairing revocation must be distinguished from a transient network failure');
+assert.match(remoteResourceBridge, /if \(RemoteHostClient\.isDeviceRevokedError\(error\)\) \{[\s\S]*?return error\(403/,
+  'revocation must return Forbidden before the offline cache fallback is considered');
+assert.doesNotMatch(remoteResourceBridge, /clearPaired\(/,
+  'the resource bridge must leave generation-checked cleanup and UI notification to the lifecycle-owned revocation monitor');
 console.log('Remote Play native bridge, cache, ComfyUI and security contract checks passed');

@@ -23,6 +23,7 @@ final class RemoteHostStore {
     private static final String KEY_ROOT_ID = "remote_host_root_id";
     private static final String KEY_ROOT_LABEL = "remote_host_root_label";
     private static final String KEY_PAIRED_HOST_ID = "remote_host_paired_host_id";
+    private static final String KEY_PAIRED_REGISTERED_AT = "remote_host_paired_registered_at";
     private static final Object LOCK = new Object();
 
     private RemoteHostStore() {}
@@ -40,7 +41,7 @@ final class RemoteHostStore {
             boolean differentHost=!previousHostId.isEmpty()&&
                     !previousHostId.equalsIgnoreCase(connection.hostId);
             if(previousHostId.isEmpty()||differentHost){
-                editor.remove(KEY_PAIRED_HOST_ID);
+                editor.remove(KEY_PAIRED_HOST_ID).remove(KEY_PAIRED_REGISTERED_AT);
             }
             if(differentHost){
                 editor.remove(KEY_ROOT_ID).remove(KEY_ROOT_LABEL);
@@ -49,10 +50,28 @@ final class RemoteHostStore {
         }
     }
 
-    static void markPaired(Context context,RemoteHostConnection host){
+    static void markPaired(Context context,RemoteHostConnection host,long registeredAtUtcMillis){
         if(host==null)throw new IllegalArgumentException("Trusted Host is required.");
-        if(!preferences(context).edit().putString(KEY_PAIRED_HOST_ID,host.hostId).commit())
+        if(registeredAtUtcMillis<=0L)throw new IllegalArgumentException("A verified registration generation is required.");
+        if(!preferences(context).edit().putString(KEY_PAIRED_HOST_ID,host.hostId)
+                .putLong(KEY_PAIRED_REGISTERED_AT,registeredAtUtcMillis).commit())
             throw new IllegalStateException("PC 페어링 상태를 영구 저장하지 못했습니다.");
+    }
+
+    static long getPairedRegisteredAtUtc(Context context){
+        return preferences(context).getLong(KEY_PAIRED_REGISTERED_AT,0L);
+    }
+
+    static boolean saveMigratedRegisteredAt(Context context,String hostId,long registeredAtUtcMillis){
+        if(hostId==null||hostId.trim().isEmpty()||registeredAtUtcMillis<=0L)return false;
+        synchronized(LOCK){
+            SharedPreferences prefs=preferences(context);
+            String paired=prefs.getString(KEY_PAIRED_HOST_ID,"");
+            long current=prefs.getLong(KEY_PAIRED_REGISTERED_AT,0L);
+            if(!paired.equalsIgnoreCase(hostId)||(current!=0L&&current!=registeredAtUtcMillis))return false;
+            if(current==registeredAtUtcMillis)return true;
+            return prefs.edit().putLong(KEY_PAIRED_REGISTERED_AT,registeredAtUtcMillis).commit();
+        }
     }
 
     static boolean isPaired(Context context){
@@ -64,14 +83,19 @@ final class RemoteHostStore {
         }catch(Exception ignored){return false;}
     }
 
-    static void clearPaired(Context context,String hostId){
-        SharedPreferences prefs=preferences(context);
+    static boolean clearPaired(Context context,String hostId,long registeredAtUtcMillis){
+        if(hostId==null||hostId.trim().isEmpty()||registeredAtUtcMillis<=0L)return false;
+        boolean cleared;
         synchronized(LOCK){
-            String saved=prefs.getString(KEY_PAIRED_HOST_ID,"");
-            if(hostId==null||hostId.trim().isEmpty()||saved.equalsIgnoreCase(hostId))
-                prefs.edit().remove(KEY_PAIRED_HOST_ID).commit();
+            SharedPreferences prefs=preferences(context);
+            String savedHost=prefs.getString(KEY_PAIRED_HOST_ID,"");
+            long savedRegisteredAt=prefs.getLong(KEY_PAIRED_REGISTERED_AT,0L);
+            if(!savedHost.equalsIgnoreCase(hostId)||savedRegisteredAt!=registeredAtUtcMillis)return false;
+            cleared=prefs.edit().remove(KEY_PAIRED_HOST_ID).remove(KEY_PAIRED_REGISTERED_AT)
+                    .remove(KEY_ROOT_ID).remove(KEY_ROOT_LABEL).commit();
         }
-        RemoteHostClient.clearSession();
+        if(cleared)RemoteHostClient.clearSession();
+        return cleared;
     }
 
     static RemoteHostConnection loadConnection(Context context) throws Exception {
@@ -89,6 +113,7 @@ final class RemoteHostStore {
                     .remove(KEY_ROOT_ID)
                     .remove(KEY_ROOT_LABEL)
                     .remove(KEY_PAIRED_HOST_ID)
+                    .remove(KEY_PAIRED_REGISTERED_AT)
                     .commit();
         }
         RemoteHostClient.clearSession();

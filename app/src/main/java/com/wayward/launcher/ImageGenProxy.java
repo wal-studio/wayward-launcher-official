@@ -39,7 +39,14 @@ final class ImageGenProxy {
         }
         final android.content.Context appContext=web.getContext().getApplicationContext();
         final String apiPath=Uri.parse(safePath).getPath();
+        final String localPath=stripGameProviderEndpointOverrides(safePath);
         if (remotePcMode) {
+            if ("/api/nai/check".equals(apiPath)) {
+                deliver(web, requestId, "POST".equals(safeMethod)
+                        ? RemoteGameImageApiClient.unsupportedNaiResponse().toString()
+                        : errorResponse(405, "Remote NAI check only supports POST."));
+                return;
+            }
             if (!RemoteHostStore.isReady(appContext)) {
                 deliver(web, requestId, errorResponse(503,
                         "PC 페어링과 승인된 PC 폴더 선택이 필요합니다."));
@@ -50,12 +57,14 @@ final class ImageGenProxy {
                 try {
                     requestBody = bodyBase64 == null || bodyBase64.isEmpty()
                             ? new byte[0] : Base64.decode(bodyBase64, Base64.DEFAULT);
+                    JSONObject requestHeaders=headersJson==null||headersJson.isEmpty()
+                            ? new JSONObject() : new JSONObject(headersJson);
                     if (requestBody.length > 4 * 1024 * 1024) {
                         deliver(web, requestId, errorResponse(413, "Remote ImageGen 요청이 4 MiB 제한을 초과했습니다."));
                         return;
                     }
                     JSONObject envelope = RemoteGameImageApiClient.execute(
-                            appContext, safeMethod, safePath, requestBody);
+                            appContext, safeMethod, safePath, requestBody, requestHeaders);
                     deliver(web, requestId, envelope.toString());
                     JSONObject diagnostic = new JSONObject();
                     try {
@@ -74,15 +83,24 @@ final class ImageGenProxy {
                     } catch (Exception ignored) {}
                     DiagnosticsLogger.event(appContext, "ERROR", "remote_game_image_api",
                             "authenticated_host_api_error", diagnostic);
-                    deliver(web, requestId, RemoteGameImageApiClient.offlineResponse(
-                            error.getMessage() == null ? "Remote PC 이미지 API에 연결하지 못했습니다." : error.getMessage()).toString());
+                    deliver(web, requestId, RemoteGameImageApiClient.failureResponse(error).toString());
                 } finally {
                     if (requestBody != null) java.util.Arrays.fill(requestBody, (byte) 0);
                 }
             }, "wayward-remote-game-image-api").start();
             return;
         }
+        if(!MainActivity.isLauncherImageGenerationMode(appContext)){
+            deliver(web,requestId,errorResponse(503,"런처에서 이미지 생성 모드를 선택하지 않았습니다. 이미지팩 전용 모드에서는 생성 요청을 허용하지 않습니다."));
+            return;
+        }
         ImageGenStatusStore.State runtime=ImageGenStatusStore.read(appContext.getFilesDir());
+        String[] runtimeParts=runtime.backendVersion.split(":");
+        String launcherMode=runtimeParts.length>=3?runtimeParts[2]:"";
+        if(!"novelai".equals(launcherMode)&&!"comfy".equals(launcherMode)){
+            deliver(web,requestId,errorResponse(503,"런처가 선택한 이미지 공급자 상태를 확인할 수 없습니다."));
+            return;
+        }
         boolean healthRequest="/api/image/health".equals(apiPath);
         if(healthRequest){
             if(!runtime.isAvailable()&&!runtime.isStarting()){
@@ -103,19 +121,36 @@ final class ImageGenProxy {
                     deliver(web, requestId, errorResponse(413, "ImageGen 요청 본문이 너무 큽니다."));
                     return;
                 }
+                // Preserve the game's complete generation payload byte-for-byte.
+                // Provider selection belongs to the launcher runtime; it must not
+                // rewrite workflow, prompts, dimensions, seeds, LoRAs, or unknown fields.
+
                 if ("PUT".equals(safeMethod) && "/api/generation/settings".equals(Uri.parse(safePath).getPath())
                         && requestBody.length > 0) {
                     try {
-                        // The launcher owns the provider and credential. Game-side
-                        // EasyGen settings may tune generation options, but cannot
-                        // switch the engine or replace/clear the AndroidKeyStore token.
+                        // The launcher owns the provider, endpoint and credentials.
+                        // Game-side prompts, LoRAs, models and generation options remain intact.
                         JSONObject settings = new JSONObject(new String(requestBody, StandardCharsets.UTF_8));
+                        // Reuse launcherMode validated above; redeclaring it here breaks Java compilation.
+                        String selectedWorkflow = settings.optString("imageProvider", "sdxl");
+                        String provider = "novelai".equals(launcherMode) ? "nai"
+                                : "comfy".equals(launcherMode) ? ("anima".equals(selectedWorkflow) ? "anima" : "sdxl") : null;
+                        if (provider == null) {
+                            deliver(web, requestId, errorResponse(503, "런처가 선택한 이미지 공급자를 확인할 수 없습니다."));
+                            return;
+                        }
                         settings.remove("naiToken");
                         settings.remove("naiTokenClear");
-                        settings.put("imageProvider", "nai");
+                        settings.remove("comfyUrl");
+                        settings.remove("launcherProviderUrl");
+                        settings.remove("launcherProfileId");
+                        settings.remove("launcherProviderId");
+                        settings.remove("launcherProviderSignature");
+                        settings.remove("launcherProviderToken");
+                        settings.put("imageProvider", provider);
                         requestBody = settings.toString().getBytes(StandardCharsets.UTF_8);
                         DiagnosticsLogger.event(appContext, "INFO", "imagegen_proxy",
-                                "game_generation_settings_locked_to_novelai", null);
+                                "game_generation_settings_locked_to_launcher", null);
                     } catch (Exception settingsError) {
                         DiagnosticsLogger.error(appContext, "imagegen_proxy",
                                 "generation_settings_policy_failed", settingsError);
@@ -124,7 +159,7 @@ final class ImageGenProxy {
                     }
                 }
 
-                URL url = new URL("http://127.0.0.1:8189" + safePath);
+                URL url = new URL("http://127.0.0.1:8189" + localPath);
                 connection = (HttpURLConnection) url.openConnection();
                 connection.setConnectTimeout(CONNECT_TIMEOUT_MS);
                 connection.setReadTimeout(READ_TIMEOUT_MS);
@@ -165,6 +200,11 @@ final class ImageGenProxy {
                 byte[] responseBody = responseStream == null ? new byte[0]
                         : readLimited(responseStream, MAX_RESPONSE_BYTES);
                 if (responseStream != null) responseStream.close();
+                if ("GET".equals(safeMethod) && apiPath != null
+                        && apiPath.startsWith("/api/image/status/")) {
+                    recordImageJobStatus(appContext, apiPath, responseBody, status,
+                            System.currentTimeMillis() - startedAt);
+                }
 
                 JSONObject payload = new JSONObject();
                 payload.put("status", status);
@@ -182,6 +222,71 @@ final class ImageGenProxy {
                 if (connection != null) connection.disconnect();
             }
         }, "wayward-imagegen-proxy").start();
+    }
+
+    private static void recordImageJobStatus(android.content.Context context, String path,
+                                             byte[] responseBody, int httpStatus, long elapsedMs) {
+        JSONObject diagnostic = new JSONObject();
+        try {
+            JSONObject response = new JSONObject(new String(responseBody, StandardCharsets.UTF_8));
+            JSONObject job = response.optJSONObject("job");
+            if (job == null) job = response;
+            String promptId = response.optString("promptId", "");
+            if (promptId.isEmpty()) promptId = job.optString("promptId", "");
+            if (promptId.isEmpty()) {
+                int slash = path.lastIndexOf('/');
+                promptId = slash >= 0 ? path.substring(slash + 1) : "";
+            }
+            String status = job.optString("status", response.optString("status", "unknown"))
+                    .toLowerCase(Locale.ROOT);
+            if (!("completed".equals(status) || "error".equals(status)
+                    || "queued".equals(status) || "processing".equals(status))) {
+                status = "unknown";
+            }
+            Object errorValue = job.opt("error");
+            if (errorValue == null || errorValue == JSONObject.NULL) errorValue = response.opt("error");
+            String error = errorValue == null || errorValue == JSONObject.NULL ? "" : String.valueOf(errorValue);
+            error = redactDiagnosticError(error);
+            diagnostic.put("promptId", promptId);
+            diagnostic.put("workflow", job.optString("workflow", response.optString("workflow", "")));
+            diagnostic.put("provider", job.optString("provider", response.optString("provider", "")));
+            diagnostic.put("status", status);
+            diagnostic.put("error", error.length() > 1024 ? error.substring(0, 1024) : error);
+            diagnostic.put("httpStatus", httpStatus);
+            diagnostic.put("elapsedMs", elapsedMs);
+        } catch (Exception parseError) {
+            try {
+                diagnostic.put("status", "unparseable");
+                diagnostic.put("httpStatus", httpStatus);
+                diagnostic.put("elapsedMs", elapsedMs);
+                diagnostic.put("parseError", parseError.getClass().getSimpleName());
+            } catch (Exception ignored) {}
+        }
+        String state = "error".equals(diagnostic.optString("status")) || httpStatus >= 400
+                ? "WARN" : "INFO";
+        DiagnosticsLogger.event(context, state, "imagegen_proxy", "image_job_status", diagnostic);
+    }
+
+    private static String redactDiagnosticError(String value) {
+        if (value == null) return "";
+        String safe = value.replaceAll("(?i)(Bearer\\s+)[A-Za-z0-9._~+/-]+=*", "$1[REDACTED]");
+        safe = safe.replaceAll("(?i)(\\b(?:NAI_TOKEN|TOKEN|API[_-]?KEY|APIKEY|ACCESS[_-]?TOKEN|REFRESH[_-]?TOKEN|AUTHORIZATION|PASSWORD|SECRET)\\b\\s*[=:]\\s*)[^\\s,;]+", "$1[REDACTED]");
+        return safe.replace('\r', ' ').replace('\n', ' ');
+    }
+
+    private static String stripGameProviderEndpointOverrides(String path) {
+        Uri uri=Uri.parse("http://127.0.0.1"+path);
+        String endpoint=uri.getPath();
+        if(!"/api/generation/resources".equals(endpoint)
+                && !"/api/generation/prompt-batch-support".equals(endpoint))return path;
+        Uri.Builder builder=uri.buildUpon().clearQuery();
+        for(String name:uri.getQueryParameterNames()){
+            if("comfyUrl".equalsIgnoreCase(name))continue;
+            for(String value:uri.getQueryParameters(name))builder.appendQueryParameter(name,value);
+        }
+        Uri sanitized=builder.build();
+        return sanitized.getEncodedPath()
+                +(sanitized.getEncodedQuery()==null?"":"?"+sanitized.getEncodedQuery());
     }
 
     private static String validatePath(String raw) {
