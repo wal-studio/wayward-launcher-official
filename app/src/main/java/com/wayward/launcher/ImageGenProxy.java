@@ -40,9 +40,9 @@ final class ImageGenProxy {
         final android.content.Context appContext=web.getContext().getApplicationContext();
         final String apiPath=Uri.parse(safePath).getPath();
         if (remotePcMode) {
-            if (!RemoteHostStore.isReady(appContext)) {
+            if (RemoteHostStore.loadConnection(appContext) == null) {
                 deliver(web, requestId, errorResponse(503,
-                        "PC 페어링과 승인된 PC 폴더 선택이 필요합니다."));
+                        "PC 페어링이 필요합니다."));
                 return;
             }
             new Thread(() -> {
