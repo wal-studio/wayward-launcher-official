@@ -114,6 +114,14 @@ jobs:
       - name: Test CloudSave native account-selection policy
         run: node tests/cloudsave-native-auth-selection.test.cjs
 
+      - name: Test bundled CloudSave 0.6.3 overlay and opt-out contract
+        run: |
+          node tests/cloudsave-bundle-contract.test.cjs
+          test_dir="$RUNNER_TEMP/cloudsave-bootstrap-test"
+          mkdir -p "$test_dir"
+          javac -d "$test_dir" app/src/main/java/com/wayward/launcher/WmlModListBootstrap.java tests/WmlModListBootstrapTest.java
+          java -cp "$test_dir" com.wayward.launcher.WmlModListBootstrapTest
+
       - name: Test Image Studio server/image-pack mode isolation
         run: node tests/imagegen-studio-mode.test.mjs
       - name: Test managed NovelAI provider lock
@@ -266,11 +274,11 @@ jobs:
           gradle-version: '8.9'
           cache-provider: basic
 
-      - name: Build Debug and Release APKs
+      - name: Build Debug, Release and Official APKs
         env:
           ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
           ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
-        run: gradle --no-daemon --stacktrace clean testDebugUnitTest assembleDebug assembleRelease
+        run: gradle --no-daemon --stacktrace clean testDebugUnitTest assembleDebug assembleRelease assembleOfficial -PwalOfficialVersionName=1.0.2
 
       - name: Verify WAL branding in Debug and Release APKs
         shell: bash
@@ -327,13 +335,33 @@ jobs:
           test "$actual_sha1" = "$expected_sha1"
           echo "Release APK signature matches the registered Android OAuth SHA-1." >> "$GITHUB_STEP_SUMMARY"
 
-      - name: Upload Debug and Release APKs
+      - name: Verify signed Official APK identity
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "${RELEASE_SIGNING_CONFIGURED:-false}" != "true" ]]; then
+            echo "Official APK requires the existing release signing identity." >&2
+            exit 1
+          fi
+          apk="app/build/outputs/apk/official/app-official.apk"
+          test -s "$apk"
+          "$ANDROID_HOME/build-tools/35.0.0/aapt" dump badging "$apk" > "$RUNNER_TEMP/official-badging.txt"
+          grep -F "package: name='com.wayward.launcher.official.wal' versionCode='3' versionName='1.0.2'" "$RUNNER_TEMP/official-badging.txt"
+          "$ANDROID_HOME/build-tools/35.0.0/apksigner" verify --verbose --print-certs "$apk" > "$RUNNER_TEMP/official-signing.txt"
+          actual_sha1="$(awk -F': ' '/Signer #1 certificate SHA-1 digest:/ {gsub(/:/, "", $2); gsub(/[[:space:]]/, "", $2); print toupper($2); exit}' "$RUNNER_TEMP/official-signing.txt")"
+          expected_sha1="D9BE7443EB247D27C958CC4250D7F5D1E078F740"
+          test "$actual_sha1" = "$expected_sha1"
+          sha256sum "$apk"
+          echo "Official APK package, upgrade version, and immutable signer identity verified." >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload Debug, Release and Official APKs
         uses: actions/upload-artifact@v7
         with:
-          name: wayward-launcher-official-apks
+          name: wayward-launcher-cloudsave-063-apks
           path: |
             app/build/outputs/apk/debug/*.apk
             app/build/outputs/apk/release/*.apk
+            app/build/outputs/apk/official/app-official.apk
           if-no-files-found: error
           retention-days: 14
 
