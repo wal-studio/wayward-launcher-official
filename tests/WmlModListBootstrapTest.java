@@ -10,7 +10,7 @@ public final class WmlModListBootstrapTest {
         if (!condition) throw new AssertionError(message);
     }
 
-    public static void main(String[] args) {
+    public static void main(String[] args) throws Exception {
         String quote = String.valueOf((char) 34);
         String fixture = "/* WML mod list */\nWML.enable([\n"
                 + "  " + quote + "addon-compat" + quote + ",\n"
