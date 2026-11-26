@@ -7,10 +7,6 @@ import java.io.InputStream;
 import java.io.SequenceInputStream;
 import java.nio.charset.StandardCharsets;
 
-/**
- * Adds the APK-bundled CloudSave mod to the WML default enable list at response
- * time. The selected game's mods.js is never written back to its document tree.
- */
 final class WmlModListBootstrap {
     private static final int MAX_MODS_JS_BYTES = 1024 * 1024;
 
@@ -50,16 +46,14 @@ final class WmlModListBootstrap {
         if (open < 0) return source;
         int close = findClosingBracket(source, open);
         if (close < 0) return source;
-
         String entries = removeComments(source.substring(open + 1, close));
-        // Preserve both an existing enabled entry and an explicit user opt-out.
         if (containsCloudSave(entries)) return source;
 
-        // Insert first so every existing ID, comment, and trailing-comma
-        // convention remains byte-for-byte intact after the inserted entry.
-        return source.substring(0, open + 1)
-                + System.lineSeparator() + "  " + (char) 34 + "cloud-save" + (char) 34 + ","
-                + source.substring(open + 1);
+        int last = lastSignificantChar(source, open + 1, close);
+        String comma = last >= 0 && source.charAt(last) != ',' ? "," : "";
+        return source.substring(0, close)
+                + comma + System.lineSeparator() + "  " + (char) 34 + "cloud-save" + (char) 34
+                + source.substring(close);
     }
 
     private static boolean containsCloudSave(String source) {
@@ -116,6 +110,27 @@ final class WmlModListBootstrap {
             i++;
         }
         return -1;
+    }
+
+    private static int lastSignificantChar(String source, int start, int end) {
+        int last = -1;
+        for (int i = start; i < end;) {
+            char c = source.charAt(i);
+            if (c == '/' && i + 1 < end) {
+                char next = source.charAt(i + 1);
+                if (next == '/') { i = skipLineComment(source, i + 2); continue; }
+                if (next == '*') { i = skipBlockComment(source, i + 2); continue; }
+            }
+            if (isQuote(c)) {
+                int after = Math.min(skipString(source, i), end);
+                if (after > i) last = after - 1;
+                i = after;
+                continue;
+            }
+            if (!Character.isWhitespace(c)) last = i;
+            i++;
+        }
+        return last;
     }
 
     private static String removeComments(String source) {
