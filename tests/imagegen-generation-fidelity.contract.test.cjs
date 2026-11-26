@@ -29,7 +29,7 @@ for (const field of ['naiModel','naiWidth','naiHeight','naiSteps','naiScale','na
 }
 assert.match(naiClient, /seed: actualSeed/);
 assert.match(naiClient, /model: config\.naiModel/);
-assert.match(settingsRoute, /unsupportedSettings: settings\.imageProvider === 'nai' \? comfyOnly : naiOnly/);
+assert.match(settingsRoute, /unsupportedSettings: comfyOnly/);
 assert.ok(settingsRoute.includes("'loras'"), 'NAI mode must explicitly report Comfy-only LoRA settings as unsupported');
 assert.match(main, /NovelAiRequestProxy\.dispatch/);
 assert.match(main, /serveGeneratedImageRequest\(path, imageDiagnostics\)/);
@@ -37,7 +37,8 @@ assert.match(main, /path\.startsWith\("\/images\/__wayward_generated__\/"\)/);
 assert.match(main, /IMAGE_MODE_PACKS_ONLY\.equals\(currentImageMode\(\)\)/);
 assert.ok(main.includes('"situation".equals(segments[3])') && main.includes('"characters".equals(segments[3])'));
 assert.ok(bridge.includes('parts[3] === "situation"') && bridge.includes('parts[3] === "characters"'));
-assert.match(service, /ImageGenBackendInstaller/);
+assert.match(main, /ImageGenBackendInstaller\.install\(this, imageGenBackendRoot\(\)\)/);
+assert.match(service, /BUN_URL/);
 assert.match(installer, /launcher-bundle\.json/);
 assert.doesNotMatch(main, /activeProfileId=profile\.id;treeUri=picked;tree=new SafTree\(picked\);saveProfiles\(\);/);
 console.log('Generation payload, NAI settings/seed, portrait routing and CDN mode/URL contracts passed.');
