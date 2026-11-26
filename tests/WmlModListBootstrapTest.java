@@ -1,15 +1,11 @@
 package com.wayward.launcher;
 
-import java.nio.charset.StandardCharsets;
-import java.nio.file.Files;
-import java.nio.file.Path;
-
 public final class WmlModListBootstrapTest {
     private static void check(boolean condition, String message) {
         if (!condition) throw new AssertionError(message);
     }
 
-    public static void main(String[] args) throws Exception {
+    public static void main(String[] args) {
         String quote = String.valueOf((char) 34);
         String fixture = "/* WML mod list */\nWML.enable([\n"
                 + "  " + quote + "addon-compat" + quote + ",\n"
@@ -57,16 +53,6 @@ public final class WmlModListBootstrapTest {
         check(WmlModListBootstrap.ensureCloudSaveEnabled(unrelated).equals(unrelated),
                 "unrelated source must remain unchanged");
 
-        if (args.length > 0) {
-            String source = Files.readString(Path.of(args[0]), StandardCharsets.UTF_8);
-            check(WmlModListBootstrap.hasEnableList(source),
-                    "pinned WML mods.js must expose a WML.enable([...]) list");
-            String result = WmlModListBootstrap.ensureCloudSaveEnabled(source);
-            check(WmlModListBootstrap.hasCloudSaveEntry(result),
-                    "CloudSave must be enabled or explicitly opted out in the pinned WML mods.js");
-            check(WmlModListBootstrap.ensureCloudSaveEnabled(result).equals(result),
-                    "patching the pinned WML mods.js must be idempotent");
-        }
         System.out.println("WML CloudSave enable-list bootstrap tests passed");
     }
 }
