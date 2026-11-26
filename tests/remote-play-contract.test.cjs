@@ -164,6 +164,10 @@ assert.match(imageProxy, /if \(remotePcMode\)[\s\S]*?requestAuthenticatedRawEnve
   'Remote PC ImageGen calls must use authenticated byte-preserving transport');
 assert.match(imageProxy, /requestBody\.length > 32 \* 1024 \* 1024/,
   'the remote request limit must support the PC ImageGen 32 MiB contract');
+assert.match(imageProxy, /validMethod\(safeMethod\)/,
+  'remote ImageGen must validate HTTP token syntax without a method allowlist');
+assert.doesNotMatch(imageProxy, /allowedMethod\(/,
+  'remote ImageGen must not reject methods through a fixed allowlist');
 assert.match(client, /requestAuthenticatedRawEnvelope[\s\S]*?requestRawEnvelope/,
   'raw ImageGen transport must reuse native Host authentication and TLS pinning');
 assert.match(client, /readLimited\(stream, 64 \* 1024 \* 1024\)/,
