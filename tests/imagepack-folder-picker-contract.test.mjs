@@ -247,9 +247,9 @@ assert.match(imageDiagnostics, /ABSOLUTE_PATH\.matcher\(safe\)/,
   "image-pack log must redact external and private absolute paths");
 assert.doesNotMatch(uploader, /imagepack\.ndjson|wayward-diagnostics-|DiagnosticsBundleExporter/,
   "automatic upload must not read image-pack logs or user-shared diagnostic ZIPs");
-assert.match(main, /Toast\.makeText\(this,\s*"진단 ZIP 수집 실패: "\s*\+\s*msg\(error\)/,
+assert.match(main, /Toast\.makeText\(this,\s*"진단 ZIP 생성 실패: "\s*\+\s*msg\(error\)/,
   "ZIP creation/share failure must be visible to the user");
-assert.match(main, /"diagnostics_share_failed"/,
+assert.match(main, /"diagnostics_zip_create_failed"/,
   "ZIP creation/share failure must be retained in the local diagnostic journal");
 assert.match(manifest, /android:allowBackup="true"/,
   "global Android backup must remain enabled while targeted data is excluded");
@@ -259,10 +259,10 @@ assert.match(uploader, /https:\/\/wayward-launcher-diagnostics-/,
   "diagnostic events must be sent over HTTPS");
 
 const bundleUploader = readFileSync(new URL("../app/src/main/java/com/wayward/launcher/DiagnosticsBundleUploader.java", import.meta.url), "utf8");
-assert.match(main, /DiagnosticsBundleUploader\.upload\(this, selectedArchive/,
-  "the diagnostics button must automatically upload the selected new or retry ZIP on explicit tap");
-assert.match(main, /DiagnosticsBundleExporter\.share\(this, selectedArchive\)/,
-  "the existing Android sharesheet must use the same selected ZIP file sent to Cloudflare");
+assert.match(main, /DiagnosticsBundleUploader\.upload\(this, archive/,
+  "the diagnostics button uploads the selected new or retry ZIP only after explicit consent");
+assert.match(main, /DiagnosticsBundleExporter\.share\(this, archive\)/,
+  "the existing Android sharesheet must use the same consented ZIP file sent to Cloudflare");
 assert.match(exporter, /static void share\(Activity activity, File archive\)/,
   "the existing native share flow must continue accepting a generated ZIP without rebuilding it");
 assert.match(bundleUploader, /https:\/\/wayward-diagnostics-ingest\.trpgengine\.workers\.dev/,
@@ -302,8 +302,8 @@ assert.doesNotMatch(bundleUploader, /readPending|DiagnosticsLogger\.acknowledge/
 
 assert.match(uploader, /DiagnosticsLogger\.acknowledge\(app, ids\)/,
   "locally retained events must only be acknowledged after successful upload");
-assert.match(main, /DiagnosticsUploader\.uploadPending\(this\)/,
-  "unacknowledged diagnostic events must retry when the launcher resumes");
+assert.doesNotMatch(main, /DiagnosticsUploader\.uploadPending\(this\)/,
+  "unacknowledged diagnostic events must not upload automatically when the launcher resumes");
 assert.match(exporter, /lastFailureStage/, "the exported metadata must report the last failure stage");
 assert.doesNotMatch(smoke, /MANAGE_EXTERNAL_STORAGE|ImagePackFileSystemAccess|이 폴더 선택|새 폴더/,
   "Android 15 acceptance cannot depend on the retired browser or all-files permission");
