@@ -10,7 +10,6 @@ const discovery = read('app/src/main/java/com/wayward/launcher/RemoteHostDiscove
 const bridge = read('app/src/main/java/com/wayward/launcher/RemoteGameResourceBridge.java');
 const resourceCache = read('app/src/main/java/com/wayward/launcher/RemoteResourceCache.java');
 const comfy = read('app/src/main/java/com/wayward/launcher/RemoteComfyClient.java');
-const remoteImageApi = read('app/src/main/java/com/wayward/launcher/RemoteGameImageApiClient.java');
 const imageProxy = read('app/src/main/java/com/wayward/launcher/ImageGenProxy.java');
 const files = read('app/src/main/java/com/wayward/launcher/RemoteFilesClient.java');
 const manifest = read('app/src/main/AndroidManifest.xml');
@@ -159,26 +158,26 @@ assert.match(bridge, /ETag/,
 assert.match(bridge, /RemoteHostClient\.openGameResource/,
   'game resources must be fetched through the certificate-pinned native API client');
 
-assert.match(main, /ImageGenProxy\.dispatch\(web,requestId,method,path,headersJson,bodyBase64,remotePcMode\)/,
-  'the existing WebView bridge must choose the remote transport from the selected image mode');
-assert.match(imageProxy, /if \(remotePcMode\)[\s\S]*?RemoteGameImageApiClient\.execute/,
-  'Remote PC image API calls must use the native authenticated transport instead of the local ImageGen port');
-assert.match(imageProxy, /RemoteHostStore\.isReady\(appContext\)/,
-  'Remote PC generation must require a paired Host and selected approved workspace root');
-assert.match(remoteImageApi, /\/v1\/game-image-api\/image\/generate/,
-  'the original single-image endpoint must map to the authenticated PC Host adapter');
-assert.match(remoteImageApi, /\/api\/pack[\s\S]*?\/v1\/game-image-api\/pack/,
-  'the original Wayward server image-pack index must be restored through the authenticated PC Host adapter');
-assert.match(remoteImageApi, /\/v1\/game-image-api\/image-hit\?\" \+ rootQuery/,
-  'image-hit accounting must be scoped to the currently selected approved workspace root');
-assert.match(remoteImageApi, /\/v1\/game-image-api\/batch\/enqueue/,
-  'the original pre-generation batch endpoint must map to the authenticated PC Host adapter');
-assert.match(remoteImageApi, /\/v1\/game-image-api\/image\/status/,
-  'the original game must be able to poll image completion on the PC Host');
-assert.match(remoteImageApi, /requestAuthenticatedJsonEnvelope/,
-  'Remote Host bearer tokens must stay inside native code and be returned as a response envelope only');
-assert.doesNotMatch(remoteImageApi, /put\("Authorization"|Bearer /,
-  'game JavaScript must not receive or create the Remote Host bearer token');
+assert.match(main, /ImageGenProxy\.dispatch\(web,requestId,method,path,headersJson,bodyBase64,hasBody,remotePcMode\)/,
+  'the WebView bridge must preserve request-body presence while selecting remote transport');
+assert.match(imageProxy, /if \(remotePcMode\)[\s\S]*?requestAuthenticatedRawEnvelope/,
+  'Remote PC ImageGen calls must use authenticated byte-preserving transport');
+assert.match(imageProxy, /requestBody\.length > 32 \* 1024 \* 1024/,
+  'the remote request limit must support the PC ImageGen 32 MiB contract');
+assert.match(client, /requestAuthenticatedRawEnvelope[\s\S]*?requestRawEnvelope/,
+  'raw ImageGen transport must reuse native Host authentication and TLS pinning');
+assert.match(client, /readLimited\(stream, 64 \* 1024 \* 1024\)/,
+  'raw ImageGen responses must preserve the 64 MiB response limit');
+assert.match(main, /imageGenProxyFetch\(String requestId,String method,String path,String headersJson,String bodyBase64,boolean hasBody\)/,
+  'the native JavaScript bridge must receive the request-body presence flag');
+assert.match(bridge, /serveImageGen\(MainActivity\.this/,
+  'native ImageGen output URLs must be intercepted separately from game-folder resources');
+assert.match(bridge, /openAuthenticatedConnection\([\s\S]*?requestPath, "GET", requestHeaders\)/,
+  'ImageGen resource reads must preserve query and range headers without adding a game root');
+assert.match(bridge, /requestPath\.startsWith\("\/v1\/imagegen\/images\/"\)/,
+  'only the Host ImageGen image resource namespace may use the native resource bridge');
+assert.doesNotMatch(imageProxy, /RemoteGameImageApiClient/,
+  'the legacy allowlisted JSON adapter must not remain in the remote request path');
 assert.match(comfy, /\/v1\/comfy\/status/,
   'Native ComfyUI status must use the authenticated Remote Host gateway');
 assert.match(comfy, /\/v1\/comfy\/jobs/,
