@@ -193,10 +193,10 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          mkdir -p "$RUNNER_TEMP/wayward-official-apk"
-          cp dist/official/WAL-Android-Launcher-1.0.0.apk "$RUNNER_TEMP/wayward-official-apk/WAL-Android-Launcher-1.0.0.apk"
-          cp dist/official/SHA256SUMS.txt "$RUNNER_TEMP/wayward-official-apk/SHA256SUMS.txt"
-          test -s "$RUNNER_TEMP/wayward-official-apk/WAL-Android-Launcher-1.0.0.apk"
+          mkdir -p /tmp/wayward-official-apk
+          cp dist/official/WAL-Android-Launcher-1.0.0.apk /tmp/wayward-official-apk/WAL-Android-Launcher-1.0.0.apk
+          cp dist/official/SHA256SUMS.txt /tmp/wayward-official-apk/SHA256SUMS.txt
+          test -s /tmp/wayward-official-apk/WAL-Android-Launcher-1.0.0.apk
 
       - name: Enable KVM for Android emulator
         run: |
@@ -223,7 +223,8 @@ jobs:
           disable-animations: true
           script: |
             set -euo pipefail
-            apk="$RUNNER_TEMP/wayward-official-apk/WAL-Android-Launcher-1.0.0.apk"
+            apk="/tmp/wayward-official-apk/WAL-Android-Launcher-1.0.0.apk"
+            ls -l /tmp/wayward-official-apk
             test -s "$apk"
             test -s "$apk"
             unzip -l "$apk" | grep -F "assets/imagegen-backend/launcher-bundle.json"
