@@ -65,7 +65,6 @@ final class DiagnosticsLogger {
             boolean urgent = "ERROR".equalsIgnoreCase(level) || "WARN".equalsIgnoreCase(level);
             append(app, redact(event.toString()) + "\n", urgent);
             if (urgent) {
-                DiagnosticsUploader.uploadPending(app);
             }
         } catch (Throwable ignored) {
             // Diagnostics must never crash or block the launcher.
