@@ -849,6 +849,7 @@ public class MainActivity extends Activity {
         Set<String> ids=new TreeSet<>();
         if(tree!=null)try{ids.addAll(tree.listModIds());}catch(Exception ignored){}
         if(zipMods!=null)ids.addAll(zipMods.listModIds());
+        ids.add("cloud-save"); // Bundled in the APK; game-folder/ZIP copies retain precedence.
         return new ArrayList<>(ids);
     }
     private void refreshStatus(){
@@ -2431,7 +2432,7 @@ public class MainActivity extends Activity {
         boolean ok=false;try(OutputStream out=getContentResolver().openOutputStream(item,"w")){if(out==null)throw new IllegalStateException("파일 열기 실패");out.write(bytes);out.flush();ContentValues d=new ContentValues();d.put(MediaStore.Downloads.IS_PENDING,0);getContentResolver().update(item,d,null,null);ok=true;}finally{if(!ok)getContentResolver().delete(item,null,null);}
     }
     private static final class FolderHandler implements WebViewAssetLoader.PathHandler{
-        private static final String CORE="wml/runtime/wml-core.js";private static final String BUNDLED_SYMBOL_TABLE="wml/symbols/2026-11-01.js";private final SafTree tree;private final android.content.res.AssetManager assets;private final ZipModStore zipMods;private final String origin;
+        private static final String CORE="wml/runtime/wml-core.js";private static final String BUNDLED_SYMBOL_TABLE="wml/symbols/2026-11-01.js";private static final String BUNDLED_CLOUD_SAVE_PREFIX="wml/mods/cloud-save/";private final SafTree tree;private final android.content.res.AssetManager assets;private final ZipModStore zipMods;private final String origin;
         FolderHandler(SafTree t,android.content.res.AssetManager a,ZipModStore z,String o){tree=t;assets=a;zipMods=z;origin=o;}
         @Override public WebResourceResponse handle(String p){return serveGamePath(p);}
         static boolean isGameRequestPath(String path){
@@ -2480,6 +2481,8 @@ public class MainActivity extends Activity {
                     return response(404,"Not Found","text/plain","Not found");
                 InputStream in=tree==null?null:(isImageAssetPath(p)?tree.openImage(p):tree.open(p));
                 if(in==null&&zipMods!=null)in=zipMods.open(p);
+                if(in==null&&p.startsWith(BUNDLED_CLOUD_SAVE_PREFIX))in=assets.open(p);
+                if(in!=null&&"wml/mods/mods.js".equalsIgnoreCase(p))in=WmlModListBootstrap.patch(in);
                 if(in==null&&BUNDLED_SYMBOL_TABLE.equals(p))in=assets.open(BUNDLED_SYMBOL_TABLE);
                 if(in==null)return null;
                 if(p.toLowerCase(Locale.ROOT).endsWith(".html")||p.toLowerCase(Locale.ROOT).endsWith(".htm"))in=mobileViewport(in);
