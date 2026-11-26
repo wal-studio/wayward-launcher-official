@@ -31,9 +31,9 @@ final class ImageGenProxy {
                          String pathAndQuery, String headersJson, String bodyBase64,
                          boolean hasBody, boolean remotePcMode) {
         if (web == null || requestId == null || !requestId.matches("[A-Za-z0-9._-]{1,80}")) return;
-        final String safeMethod = method == null ? "GET" : method.toUpperCase(Locale.ROOT);
+        final String safeMethod = method == null ? "GET" : method;
         final String safePath = validatePath(pathAndQuery);
-        if (safePath == null || !allowedMethod(safeMethod)) {
+        if (safePath == null || !validMethod(safeMethod)) {
             deliver(web, requestId, errorResponse(400, "허용되지 않은 ImageGen 요청입니다."));
             return;
         }
@@ -209,10 +209,8 @@ final class ImageGenProxy {
         return uri.getEncodedPath() + (uri.getEncodedQuery() == null ? "" : "?" + uri.getEncodedQuery());
     }
 
-    private static boolean allowedMethod(String method) {
-        return method.equals("GET") || method.equals("POST") || method.equals("PUT")
-                || method.equals("PATCH") || method.equals("DELETE") || method.equals("HEAD")
-                || method.equals("OPTIONS");
+    private static boolean validMethod(String method) {
+        return method != null && method.matches("[!#$%&'*+.^_`|~0-9A-Za-z-]{1,32}");
     }
 
     private static byte[] readLimited(InputStream in, int max) throws Exception {
