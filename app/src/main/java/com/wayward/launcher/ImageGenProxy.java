@@ -29,7 +29,7 @@ final class ImageGenProxy {
 
     static void dispatch(WebView web, String requestId, String method,
                          String pathAndQuery, String headersJson, String bodyBase64,
-                         boolean remotePcMode) {
+                         boolean hasBody, boolean remotePcMode) {
         if (web == null || requestId == null || !requestId.matches("[A-Za-z0-9._-]{1,80}")) return;
         final String safeMethod = method == null ? "GET" : method.toUpperCase(Locale.ROOT);
         final String safePath = validatePath(pathAndQuery);
@@ -50,12 +50,27 @@ final class ImageGenProxy {
                 try {
                     requestBody = bodyBase64 == null || bodyBase64.isEmpty()
                             ? new byte[0] : Base64.decode(bodyBase64, Base64.DEFAULT);
-                    if (requestBody.length > 4 * 1024 * 1024) {
-                        deliver(web, requestId, errorResponse(413, "Remote ImageGen 요청이 4 MiB 제한을 초과했습니다."));
+                    if (requestBody.length > 32 * 1024 * 1024) {
+                        deliver(web, requestId, errorResponse(413, "Remote ImageGen 요청 본문이 32 MiB 제한을 초과했습니다."));
                         return;
                     }
-                    JSONObject envelope = RemoteGameImageApiClient.execute(
-                            appContext, safeMethod, safePath, requestBody);
+                    RemoteHostConnection host = RemoteHostStore.loadConnection(appContext);
+                    if (host == null) throw new java.io.IOException("PC Host 연결이 없습니다.");
+                    JSONObject rawHeaders = headersJson == null || headersJson.isEmpty()
+                            ? new JSONObject() : new JSONObject(headersJson);
+                    java.util.Map<String, String> forwardedHeaders = new java.util.HashMap<>();
+                    String contentType = null;
+                    java.util.Iterator<String> headerNames = rawHeaders.keys();
+                    while (headerNames.hasNext()) {
+                        String name = headerNames.next();
+                        String value = rawHeaders.optString(name, null);
+                        if (value == null) continue;
+                        forwardedHeaders.put(name, value);
+                        if ("content-type".equalsIgnoreCase(name)) contentType = value;
+                    }
+                    JSONObject envelope = RemoteHostClient.requestAuthenticatedRawEnvelope(
+                            appContext, host, "/v1/imagegen" + safePath, safeMethod,
+                            requestBody, hasBody, contentType, forwardedHeaders);
                     deliver(web, requestId, envelope.toString());
                     JSONObject diagnostic = new JSONObject();
                     try {
@@ -63,7 +78,7 @@ final class ImageGenProxy {
                         diagnostic.put("path", apiPath);
                         diagnostic.put("status", envelope.optInt("status", 502));
                     } catch (Exception ignored) {}
-                    DiagnosticsLogger.event(appContext, "INFO", "remote_game_image_api",
+                    DiagnosticsLogger.event(appContext, "INFO", "remote_imagegen_passthrough",
                             "authenticated_host_api_response", diagnostic);
                 } catch (Exception error) {
                     JSONObject diagnostic = new JSONObject();
@@ -74,12 +89,12 @@ final class ImageGenProxy {
                     } catch (Exception ignored) {}
                     DiagnosticsLogger.event(appContext, "ERROR", "remote_game_image_api",
                             "authenticated_host_api_error", diagnostic);
-                    deliver(web, requestId, RemoteGameImageApiClient.offlineResponse(
-                            error.getMessage() == null ? "Remote PC 이미지 API에 연결하지 못했습니다." : error.getMessage()).toString());
+                    deliver(web, requestId, errorResponse(502,
+                            error.getMessage() == null ? "Remote PC ImageGen 연결에 실패했습니다." : error.getMessage()));
                 } finally {
                     if (requestBody != null) java.util.Arrays.fill(requestBody, (byte) 0);
                 }
-            }, "wayward-remote-game-image-api").start();
+            }, "wayward-remote-imagegen-passthrough").start();
             return;
         }
         ImageGenStatusStore.State runtime=ImageGenStatusStore.read(appContext.getFilesDir());
