@@ -2315,7 +2315,7 @@ public class MainActivity extends Activity {
             if (!hasImagePackBridgeCapability(capability)) return imagePackBridgeDenied();
             return imagePackDirectoryAccess==null?"{\"ok\":false,\"name\":\"NotFoundError\"}":imagePackDirectoryAccess.getFolderInfoJson();
         }
-        @JavascriptInterface public String version(){return "1.0.0";}
+
         @JavascriptInterface public String listModIds(){
             try{JSONObject r=new JSONObject();JSONArray a=new JSONArray();for(String id:allModIds())a.put(id);r.put("ok",true);r.put("ids",a);return r.toString();}
             catch(Exception e){try{JSONObject r=new JSONObject();r.put("ok",false);r.put("ids",new JSONArray());return r.toString();}catch(Exception ignored){return "{}";}}
