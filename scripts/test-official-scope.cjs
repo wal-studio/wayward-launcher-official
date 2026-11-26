@@ -91,7 +91,7 @@ assert.match(main, /clearGoogleAccessToken\(String token,String capability\)/, '
 assert.match(main, /startImageServerAfterNaiSettings=true;\s*openNovelAiSettings\(\);\s*return;/,
   'starting generation without a token must open NAI settings and remember the requested start');
 const naiResultStart = main.indexOf('if(req==REQUEST_NAI_SETTINGS)');
-const naiResultEnd = main.indexOf('if(req==REQUEST_GOOGLE_AUTH)', naiResultStart);
+const naiResultEnd = main.indexOf('String authNonce=pendingGoogleAuthRequestNonces.remove(req);', naiResultStart);
 assert(naiResultStart >= 0 && naiResultEnd > naiResultStart, 'NAI settings result handler must exist');
 assert.match(main.slice(naiResultStart, naiResultEnd), /requestedStart\|\|IMAGE_MODE_GENERATION\.equals\(currentImageMode\(\)\)/,
   'saving a token from a pending server-start flow must resume server startup');
