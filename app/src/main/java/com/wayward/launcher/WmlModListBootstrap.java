@@ -16,17 +16,23 @@ final class WmlModListBootstrap {
         if (source == null) return null;
         ByteArrayOutputStream captured = new ByteArrayOutputStream();
         byte[] buffer = new byte[8192];
-        int count;
-        while ((count = source.read(buffer)) >= 0) {
-            if (count == 0) continue;
-            if (captured.size() + count > MAX_MODS_JS_BYTES) {
-                return new SequenceInputStream(new ByteArrayInputStream(captured.toByteArray()), source);
+        boolean handedOff = false;
+        try {
+            int count;
+            while ((count = source.read(buffer)) >= 0) {
+                if (count == 0) continue;
+                if (captured.size() + count > MAX_MODS_JS_BYTES) {
+                    handedOff = true;
+                    return new SequenceInputStream(new ByteArrayInputStream(captured.toByteArray()), source);
+                }
+                captured.write(buffer, 0, count);
             }
-            captured.write(buffer, 0, count);
+            String original = new String(captured.toByteArray(), StandardCharsets.UTF_8);
+            String updated = ensureCloudSaveEnabled(original);
+            return new ByteArrayInputStream(updated.getBytes(StandardCharsets.UTF_8));
+        } finally {
+            if (!handedOff) source.close();
         }
-        String original = new String(captured.toByteArray(), StandardCharsets.UTF_8);
-        String updated = ensureCloudSaveEnabled(original);
-        return new ByteArrayInputStream(updated.getBytes(StandardCharsets.UTF_8));
     }
 
     static boolean hasEnableList(String source) {
