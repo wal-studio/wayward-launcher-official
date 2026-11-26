@@ -356,7 +356,7 @@ final class RemoteHostClient {
             String method, byte[] body, boolean hasBody, String contentType,
             Map<String, String> requestHeaders, String authorization) throws Exception {
         if (path == null || !path.startsWith("/") || path.startsWith("//") ||
-                path.contains("\\\\") || path.contains("/../") || path.endsWith("/..")) {
+                path.contains("\\") || path.contains("/../") || path.endsWith("/..")) {
             throw new IllegalArgumentException("Invalid ImageGen Host path.");
         }
         URL url = new URL(host.baseUrl.trim().replaceAll("/+$", "") + path);
