@@ -54,6 +54,10 @@ jobs:
             "https://raw.githubusercontent.com/diethoon/wayward/${source_commit}/mods.zip" \
             -o "$RUNNER_TEMP/wayward-mods.zip"
           python3 scripts/embed_imagegen_backend.py "$RUNNER_TEMP/wayward-mods.zip"
+          test_dir="$RUNNER_TEMP/cloudsave-bootstrap-test"
+          mkdir -p "$test_dir"
+          javac -d "$test_dir" app/src/main/java/com/wayward/launcher/WmlModListBootstrap.java tests/WmlModListBootstrapTest.java
+          java -cp "$test_dir" com.wayward.launcher.WmlModListBootstrapTest "$RUNNER_TEMP/wayward-mods.zip"
 
       - name: Check branch diff whitespace
         run: git diff --check origin/main...HEAD
@@ -68,6 +72,7 @@ jobs:
       - name: Test official launcher scope
         run: |
           node scripts/test-official-scope.cjs
+          node tests/cloudsave-bundle-contract.test.cjs
           python3 -m py_compile scripts/check-glass-ui-layout.py
 
       - name: Test Google OAuth bridge contract
