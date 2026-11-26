@@ -161,6 +161,51 @@ final class RemoteGameResourceBridge {
         }
     }
 
+    /** Fetches native ImageGen output resources without adding a game root or using the game cache. */
+    static WebResourceResponse serveImageGen(Context context, String requestPath,
+            Map<String, String> requestHeaders, AtomicInteger diagnostics) {
+        HttpsURLConnection connection = null;
+        try {
+            if (requestPath == null || !requestPath.startsWith("/v1/imagegen/images/") ||
+                    requestPath.contains("\\\\") || requestPath.contains("/../") ||
+                    requestPath.endsWith("/..")) {
+                return error(400, "Bad Request", "ImageGen resource path is invalid.");
+            }
+            RemoteHostConnection host = RemoteHostStore.loadConnection(context);
+            if (host == null) return error(503, "Service Unavailable", "PC Host가 등록되지 않았습니다.");
+            connection = RemoteHostClient.openAuthenticatedConnection(
+                    context, host, requestPath, "GET", requestHeaders);
+            int status = connection.getResponseCode();
+            InputStream source = status == 304 || status == 204
+                    ? new ByteArrayInputStream(new byte[0])
+                    : status >= 400 ? connection.getErrorStream() : connection.getInputStream();
+            if (source == null) source = new ByteArrayInputStream(new byte[0]);
+            final HttpsURLConnection active = connection;
+            InputStream body = new FilterInputStream(source) {
+                @Override public void close() throws IOException {
+                    try { super.close(); } finally { active.disconnect(); }
+                }
+            };
+            String contentType = connection.getHeaderField("Content-Type");
+            Map<String, String> responseHeaders = filteredResponseHeaders(connection);
+            for (String name : new String[] {"Content-Disposition", "Location", "X-Request-ID"}) {
+                String value = connection.getHeaderField(name);
+                if (value != null && value.length() <= 4096) responseHeaders.put(name, value);
+            }
+            String mime = normalizeMime(contentType);
+            String charset = parseCharset(contentType);
+            return new WebResourceResponse(mime, charset, status, reasonPhrase(status),
+                    responseHeaders, body);
+        } catch (Exception error) {
+            if (connection != null) connection.disconnect();
+            if (diagnostics != null && diagnostics.getAndIncrement() < 16) {
+                android.util.Log.w("WaywardRemotePlay",
+                        "Remote ImageGen resource failed: " + error.getClass().getSimpleName());
+            }
+            return error(502, "Bad Gateway", "PC ImageGen 이미지를 가져오지 못했습니다.");
+        }
+    }
+
     private static final class CacheTeeInputStream extends FilterInputStream {
         private final HttpsURLConnection connection;
         private final RemoteResourceCache.CacheWriter writer;
