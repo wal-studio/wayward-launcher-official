@@ -233,12 +233,12 @@ assert.match(exporter, /application\/zip/, "the collected diagnostic archive mus
 assert.match(exporter, /Intent\.ACTION_SEND/, "the ZIP must be shared through Android's native share sheet");
 assert.match(exporter, /launcher\.ndjson/, "the manual diagnostic ZIP must include the general launcher event journal");
 assert.match(exporter, /imagepack\.ndjson/, "the manual diagnostic ZIP must include image-pack request traces");
-assert.match(launcherLogger, /DiagnosticsUploader\.uploadPending\(app\)/,
-  "urgent launcher events must trigger automatic upload");
-assert.match(launcherLogger, /DiagnosticsUploadPolicy\.isUploadableLevel\(event\.optString\("level"\)\)/,
-  "the automatic upload queue must filter events before adding them to the payload");
+assert.doesNotMatch(launcherLogger, /DiagnosticsUploader\.uploadPending\(app\)/,
+  "urgent launcher events must remain local until the user explicitly consents to a ZIP upload");
+assert.doesNotMatch(launcherLogger, /DiagnosticsUploadPolicy\.isUploadableLevel\(event\.optString\("level"\)\)/,
+  "the logger must not invoke a severity-based automatic upload queue");
 assert.match(uploadPolicy, /"WARN"\.equalsIgnoreCase\(level\) \|\| "ERROR"\.equalsIgnoreCase\(level\)/,
-  "only WARN and ERROR levels may be automatically uploaded");
+  "the retained legacy policy remains limited to WARN and ERROR if explicitly invoked");
 assert.match(launcherLogger, /CONTENT_URI\.matcher\(out\)/,
   "launcher log must redact full content URIs");
 assert.match(launcherLogger, /ABSOLUTE_PATH\.matcher\(out\)/,
@@ -254,7 +254,7 @@ assert.match(main, /"diagnostics_share_failed"/,
 assert.match(manifest, /android:allowBackup="true"/,
   "global Android backup must remain enabled while targeted data is excluded");
 assert.match(launcherLogger, /"ERROR".equalsIgnoreCase\(level\) \|\| "WARN".equalsIgnoreCase\(level\)/,
-  "automatic upload must remain limited to errors and warnings");
+  "urgent WARN and ERROR events remain synchronously persisted locally");
 assert.match(uploader, /https:\/\/wayward-launcher-diagnostics-/,
   "diagnostic events must be sent over HTTPS");
 
