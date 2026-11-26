@@ -189,6 +189,16 @@ jobs:
           Write-Host "SIGNED OFFICIAL APK SHA256: $hash"
           Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY -Value "Signed Official APK created; SHA-256: $hash"
 
+      - name: Verify packaged APK integrity and bundled image backend
+        shell: bash
+        run: |
+          set -euo pipefail
+          apk="dist/official/WAL-Android-Launcher-1.0.0.apk"
+          test -s "$apk"
+          unzip -t "$apk"
+          unzip -l "$apk" | grep -F "assets/imagegen-backend/launcher-bundle.json"
+          unzip -l "$apk" | grep -F "assets/imagegen-backend/wayward-imagegen/package.json"
+
       - name: Stage signed APK outside repository workspace
         shell: bash
         run: |
