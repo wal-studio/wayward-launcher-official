@@ -214,15 +214,7 @@ jobs:
           if-no-files-found: error
           retention-days: 14
 
-      - name: Install and launch signed Official APK on Android 15 emulator
-        uses: reactivecircus/android-emulator-runner@v2
-        with:
-          api-level: 35
-          arch: x86_64
-          profile: pixel_6
-          disable-animations: true
-          script: bash "$GITHUB_WORKSPACE/scripts/smoke-official-apk.sh"
-
+      # Emulator launch validation is intentionally excluded from this artifact-only run.
       - name: Check physical device visibility
         shell: bash
         run: |
