@@ -7,7 +7,7 @@ const mod = fs.readFileSync('app/src/main/assets/wml/mods/cloud-save/mod.js', 'u
 const crypto = fs.readFileSync('app/src/main/assets/wml/mods/cloud-save/crypto.js', 'utf8');
 
 assert.match(main, /ids\.add\("cloud-save"\)/,
-  'the built-in CloudSave ID must be included in the launcher's WML folder list');
+  'the built-in CloudSave ID must be included in the WML folder list');
 assert.match(main, /BUNDLED_CLOUD_SAVE_PREFIX\s*=\s*"wml\/mods\/cloud-save\/"/,
   'the APK asset overlay must be scoped to the CloudSave mod directory');
 assert.match(main, /p\.startsWith\(BUNDLED_CLOUD_SAVE_PREFIX\)\)in=assets\.open\(p\)/,
