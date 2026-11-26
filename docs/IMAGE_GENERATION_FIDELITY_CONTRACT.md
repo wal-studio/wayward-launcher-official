@@ -1,8 +1,8 @@
 # Provider-Agnostic Image Generation Fidelity Contract
 
-**Status:** Normative cross-launcher contract  
-**Goal:** The user's configured image-generation conditions must be applied by the selected provider, and the resulting image must appear in the correct game portrait slot.  
-**Android baseline:** `wal-studio/WAL-Android-Development`, `work/imagegen-provider-parity`, `f35ab58971da781236e19a842207db8f37ff3888`  
+**Status:** Normative cross-launcher contract
+**Goal:** The user's configured image-generation conditions must be applied by the selected provider, and the resulting image must appear in the correct game portrait slot.
+**Android baseline:** `wal-studio/WAL-Android-Development`, `work/imagegen-provider-parity`, `f35ab58971da781236e19a842207db8f37ff3888`
 **Implementation branch:** `work/imagegen-request-fidelity-20261126`
 
 ## 1. Single success criterion

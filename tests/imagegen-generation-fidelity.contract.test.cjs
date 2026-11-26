@@ -29,7 +29,7 @@ for (const field of ['naiModel','naiWidth','naiHeight','naiSteps','naiScale','na
 }
 assert.match(naiClient, /seed: actualSeed/);
 assert.match(naiClient, /model: config\.naiModel/);
-assert.match(settingsRoute, /unsupportedSettings: comfyOnly/);
+assert.match(settingsRoute, /unsupportedSettings: settings\\.imageProvider === 'nai' \\? comfyOnly : naiOnly/);
 assert.ok(settingsRoute.includes("'loras'"), 'NAI mode must explicitly report Comfy-only LoRA settings as unsupported');
 assert.match(main, /NovelAiRequestProxy\.dispatch/);
 assert.match(main, /serveGeneratedImageRequest\(path, imageDiagnostics\)/);
