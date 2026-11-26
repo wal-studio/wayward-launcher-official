@@ -37,10 +37,12 @@ for (const route of [
 ]) {
   assert.ok(remoteApi.includes(route), "Remote PC must route " + route + " through the paired Host");
 }
-assert.match(remoteApi, /RemoteHostClient\.requestAuthenticatedJsonEnvelope/);
+assert.match(remoteApi, /RemoteHostClient\.requestAuthenticatedRawJsonEnvelope/);
+assert.match(remoteApi, /requestAuthenticatedRawJsonEnvelope\([\s\S]*requestBytes/);
 assert.match(remoteApi, /body\.remove\("comfyUrl"\)/);
 assert.match(remoteApi, /body\.remove\("modelsDirectory"\)/);
-assert.match(remoteApi, /body\.remove\("naiToken"\)/);
+assert.match(remoteApi, /removeCredentialFields\(body\)/);
+assert.match(remoteApi, /normalized\.equals\("novelaitoken"\)/);
 
 // NAI gets its supported prompt controls, including user-edited character prompts.
 // Local/character LoRA files are not silently passed as if NAI could load them.
