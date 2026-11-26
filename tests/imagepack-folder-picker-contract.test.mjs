@@ -373,7 +373,7 @@ assert.match(acceptance, /runOnUiThread\(\(\) -> chooseImagePackFolderOnUiThread
   "the Android 15 debug acceptance bridge must use the same WebView thread contract");
 assert.match(main, /recordImagePackDiagnostic\(String requestId/, "JavaScript diagnostics must enter the durable journal through WMLHost");
 assert.match(main, /diagnostics=compactButton\("진단"/, "the launcher home screen must expose the diagnostics share action");
-assert.match(main, /DiagnosticsBundleExporter\.share\(this,\s*selectedArchive\)/,
+assert.match(main, /DiagnosticsBundleExporter\.share\(this,\s*archive\)/,
   "the diagnostics button must open the Android share flow with the same selected ZIP sent to Cloudflare");
 assert.match(access, /__waywardNativeImagePackPickerDispatch/, "native completion must resolve the original frame instead of main-frame-only delivery");
 assert.match(main, /imagePackDirectoryAccess\.onResume\(\)/, "the production activity must revalidate the persisted SAF tree grant on resume");
