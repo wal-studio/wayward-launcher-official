@@ -2638,9 +2638,9 @@ public class MainActivity extends Activity {
                 }
             });
         }
-        @JavascriptInterface public void imageGenProxyFetch(String requestId,String method,String path,String headersJson,String bodyBase64){
+        @JavascriptInterface public void imageGenProxyFetch(String requestId,String method,String path,String headersJson,String bodyBase64,boolean hasBody){
             boolean remotePcMode=IMAGE_MODE_REMOTE_PC.equals(currentImageMode());
-            ImageGenProxy.dispatch(web,requestId,method,path,headersJson,bodyBase64,remotePcMode);
+            ImageGenProxy.dispatch(web,requestId,method,path,headersJson,bodyBase64,hasBody,remotePcMode);
         }
         @JavascriptInterface public String imageGenRuntimeStatus(){
             boolean remotePcMode=IMAGE_MODE_REMOTE_PC.equals(currentImageMode());
