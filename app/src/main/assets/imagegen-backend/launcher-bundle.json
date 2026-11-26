@@ -43,8 +43,8 @@
     "wayward-imagegen/src/server.ts": "ab6805dae254b191de32bd62d5b34a493600f24aa9a3fb04e6260d4aaf4ebc4f",
     "wayward-imagegen/src/sharp.d.ts": "eec719a7a838938785d49011b635c91dd6baf7e640b7130a788b330f2932155e",
     "wayward-imagegen/src/splitImageCache.ts": "1e1084db0b632dbea7322a81ff2680b661fd361a2e584cd8817b42fc23f9d567",
-    "wayward-imagegen/ui/index.html": "571d8ba3b5dbcf74a195337ab5646ca22633292b73c0161439c92f67c71cec46",
-    "wayward-imagegen/wayward-imagegen.config.json": "b1caf6965cdcee643a7b251074e02ca56e9762d58eb651e3220bbe60fe5d96fa"
+    "wayward-imagegen/ui/index.html": "c5fbc04ec0ec8f3e1c792001a948f97c99985ea18320e21e9e62cd63665eb1b6",
+    "wayward-imagegen/wayward-imagegen.config.json": "1ab4e29409d7c2941fd24d15f0be80efcd7038e284913f132e82be3e5756dab3"
   },
   "launcherPatches": [
     "persist-discovered-character-filter",
