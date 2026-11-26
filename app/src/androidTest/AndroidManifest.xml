@@ -3,6 +3,7 @@
         <provider
             android:name="com.wayward.launcher.CdnFallbackTestDocumentsProvider"
             android:authorities="com.wayward.launcher.test.documents"
+            android:permission="android.permission.MANAGE_DOCUMENTS"
             android:exported="true"
             android:grantUriPermissions="true" />
     </application>
