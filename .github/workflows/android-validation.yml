@@ -2,7 +2,7 @@ name: Official Android validation
 
 on:
   pull_request:
-    branches: [main, 'work/**']
+    branches: [main, 'work/**', 'migration/**']
   push:
     branches:
       - main
