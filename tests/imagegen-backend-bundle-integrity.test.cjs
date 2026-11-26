@@ -40,4 +40,4 @@ for (const required of [
   "wayward-imagegen/src/routes/image.ts"
 ]) assert.ok(manifest.files[required], "required backend entry missing from manifest: " + required);
 
-console.log("Pinned ImageGen 0.8.4 bundle: 42 files, byte count, and every SHA-256 verified.");
+console.log("Vendored ImageGen 0.8.4 bundle: " + manifest.fileCount + " files, " + totalBytes + " bytes, and every SHA-256 verified.");
