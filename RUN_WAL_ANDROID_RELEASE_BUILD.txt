@@ -1,1 +1,1 @@
-Retry signed Official 1.0.0 APK; stage verified APK in runner temp before API 35 install/launch smoke. Upload APK and SHA256SUMS.txt before smoke. Do not publish a GitHub Release.
+Retry signed Official 1.0.0 APK with stable /tmp staging for Android 15 emulator install/launch. Upload APK and SHA256SUMS.txt before smoke. Do not publish a GitHub Release.
