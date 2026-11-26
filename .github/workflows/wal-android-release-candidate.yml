@@ -201,6 +201,7 @@ jobs:
             apk="dist/official/WAL-Android-Launcher-1.0.0.apk"
             test -s "$apk"
             unzip -l "$apk" | grep -F "assets/imagegen-backend/launcher-bundle.json"
+            unzip -l "$apk" | grep -F "assets/imagegen-backend/wayward-imagegen/package.json"
             adb install -r "$apk"
             adb logcat -c
             adb shell am start -W -n "com.wayward.launcher.official.wal/com.wayward.launcher.MainActivity"

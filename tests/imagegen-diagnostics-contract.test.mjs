@@ -11,7 +11,7 @@ const main=read("app/src/main/java/com/wayward/launcher/MainActivity.java");
 const exporter=read("app/src/main/java/com/wayward/launcher/DiagnosticsBundleExporter.java");
 const uploader=read("app/src/main/java/com/wayward/launcher/DiagnosticsBundleUploader.java");
 const manifest=read("app/src/main/AndroidManifest.xml");
-const workflow=read(".github/workflows/android-product-validation-v1.3.yml");
+const workflow=read(".github/workflows/wal-android-release-candidate.yml");
 test("installer failure is emitted from the actual install catch path with stage and target metadata",()=>{
  const method=installer.slice(installer.indexOf("static File install("),installer.indexOf("static boolean isValidInstalled("));
  assert.match(method,/catch\s*\(Throwable error\)/);
@@ -48,7 +48,7 @@ test("ZIP metadata includes versionCode, Android SDK, APK backend assets and ins
  assert.match(exporter,/backendInstallTargetRelativePath/);
  assert.match(exporter,/backendInstallParentWritable/);
  assert.match(exporter,/backendInstalledValid/);
- assert.match(workflow,/aapt list \$apk/);
+ assert.match(workflow,/unzip -l "\$apk"/);
  assert.match(workflow,/assets\/imagegen-backend\/launcher-bundle\.json/);
  assert.match(workflow,/assets\/imagegen-backend\/wayward-imagegen\/package\.json/);
 });
