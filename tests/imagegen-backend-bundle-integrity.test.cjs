@@ -1,3 +1,4 @@
+// The reviewed vendored bundle is the source of truth; verify every file against its manifest.
 const assert = require("node:assert/strict");
 const crypto = require("node:crypto");
 const fs = require("node:fs");
