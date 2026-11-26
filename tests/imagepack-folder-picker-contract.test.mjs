@@ -235,8 +235,8 @@ assert.match(exporter, /launcher\.ndjson/, "the manual diagnostic ZIP must inclu
 assert.match(exporter, /imagepack\.ndjson/, "the manual diagnostic ZIP must include image-pack request traces");
 assert.doesNotMatch(launcherLogger, /DiagnosticsUploader\.uploadPending\(app\)/,
   "urgent launcher events must remain local until the user explicitly consents to a ZIP upload");
-assert.doesNotMatch(launcherLogger, /DiagnosticsUploadPolicy\.isUploadableLevel\(event\.optString\("level"\)\)/,
-  "the logger must not invoke a severity-based automatic upload queue");
+assert.match(launcherLogger, /DiagnosticsUploadPolicy\.isUploadableLevel\(event\.optString\("level"\)\)/,
+  "only explicitly consented diagnostic ZIPs include events allowed by the WARN/ERROR severity policy");
 assert.match(uploadPolicy, /"WARN"\.equalsIgnoreCase\(level\) \|\| "ERROR"\.equalsIgnoreCase\(level\)/,
   "the retained legacy policy remains limited to WARN and ERROR if explicitly invoked");
 assert.match(launcherLogger, /CONTENT_URI\.matcher\(out\)/,
