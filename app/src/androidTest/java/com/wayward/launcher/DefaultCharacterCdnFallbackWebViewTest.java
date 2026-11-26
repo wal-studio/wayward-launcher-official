@@ -71,6 +71,13 @@ public final class DefaultCharacterCdnFallbackWebViewTest {
         final Uri treeUri = DocumentsContract.buildTreeDocumentUri(
                 CdnFallbackTestDocumentsProvider.AUTHORITY,
                 CdnFallbackTestDocumentsProvider.ROOT_ID);
+        // A real ACTION_OPEN_DOCUMENT_TREE result carries a temporary/persistable
+        // URI grant. The test-only provider lives in the instrumentation APK, so
+        // reproduce that grant explicitly for the target launcher package.
+        instrumentation.getContext().grantUriPermission(context.getPackageName(), treeUri,
+                Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION);
+        context.getContentResolver().takePersistableUriPermission(
+                treeUri, Intent.FLAG_GRANT_READ_URI_PERMISSION);
         final String successHtml = "<!doctype html><html><body>"
                 + "<img id='cdnSuccess' src='https://art.sintention.com/images/illustrious/situation/info/pippa/wal-cdn-fallback-success.png'>"
                 + "</body></html>";
