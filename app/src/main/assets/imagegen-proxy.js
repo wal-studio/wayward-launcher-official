@@ -101,7 +101,8 @@
           request.method,
           url.pathname + url.search,
           JSON.stringify(headers),
-          bytesToBase64(bodyBuffer)
+          bytesToBase64(bodyBuffer),
+          request.body !== null
         );
         report("launcher_imagegen_request_dispatched", diagnostic);
       } catch (error) {
