@@ -121,7 +121,11 @@ assert.equal(outgoing.at(-1).input, "https://localhost:42000/images/__wayward_ge
 const directNaiOn = await window.fetch("https://image.novelai.net/ai/generate-image", {
   method: "POST", body: "{}"
 });
-assert.equal(directNaiOn.status, 503, "game code must not bypass the managed server with direct NovelAI requests");
+assert.equal(directNaiOn.status, 200, "direct NovelAI requests must be routed through the launcher-owned local NAI proxy when the managed image mode is ON");
+assert.equal(outgoing.at(-1).input, "http://127.0.0.1:8189/api/nai-compat/ai/generate-image",
+  "direct NovelAI requests must be rewritten to the local NAI compatibility route");
+assert.equal(outgoing.some(item => item.input === "https://image.novelai.net/ai/generate-image"), false,
+  "the game must never send a direct request to the external NovelAI host");
 assert.equal(persisted.imageBackendUrl, "https://my-worker.workers.dev/generate",
   "the user's persisted settings must not be overwritten");
 console.log("Image Studio strict image-pack/server mode test passed.");
