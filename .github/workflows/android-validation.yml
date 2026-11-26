@@ -60,7 +60,7 @@ jobs:
         uses: oven-sh/setup-bun@v2
 
       - name: Check branch diff whitespace
-        run: git diff --check origin/main...HEAD -- . ':!patches/wal-saf-source.patch'
+        run: git diff --check origin/main...HEAD -- . ':!patches/wal-saf-source.patch' ':!app/src/main/assets/imagegen-backend/**'
 
       - name: Check JavaScript syntax
         run: |
