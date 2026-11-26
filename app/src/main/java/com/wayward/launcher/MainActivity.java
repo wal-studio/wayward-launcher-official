@@ -1473,6 +1473,12 @@ public class MainActivity extends Activity {
                         }
                         return folderHandler.serveGamePath(path.substring(6));
                     }
+                    if(path != null && path.startsWith("/v1/imagegen/images/") &&
+                            IMAGE_MODE_REMOTE_PC.equals(currentImageMode())) {
+                        return RemoteGameResourceBridge.serveImageGen(MainActivity.this,
+                                u.getEncodedPath() + (u.getEncodedQuery() == null ? "" : "?" + u.getEncodedQuery()),
+                                r.getRequestHeaders(), imageDiagnostics);
+                    }
                     if(path != null && path.startsWith("/images/__wayward_generated__/")) {
                         if(IMAGE_MODE_REMOTE_PC.equals(currentImageMode()))
                             return RemoteGameResourceBridge.serve(MainActivity.this,u.getEncodedPath(),r.getRequestHeaders(),imageDiagnostics);
