@@ -59,16 +59,6 @@ jobs:
       - name: Set up Bun
         uses: oven-sh/setup-bun@v2
 
-      - name: Embed pinned NovelAI image-generation backend
-        shell: bash
-        run: |
-          set -euo pipefail
-          source_commit="26d6c32e0b0abbb886e3029efd548b7ca6774401"
-          curl --fail --location --silent --show-error \
-            "https://raw.githubusercontent.com/diethoon/wayward/${source_commit}/mods.zip" \
-            -o "$RUNNER_TEMP/wayward-mods.zip"
-          python3 scripts/embed_imagegen_backend.py "$RUNNER_TEMP/wayward-mods.zip"
-
       - name: Check branch diff whitespace
         run: git diff --check origin/main...HEAD -- . ':!patches/wal-saf-source.patch'
 

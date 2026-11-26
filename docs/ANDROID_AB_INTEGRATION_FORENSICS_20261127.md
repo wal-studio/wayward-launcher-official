@@ -38,7 +38,7 @@ A/B는 같은 공통 조상에서 갈라진 별도 계보이며, 한쪽이 다�
 - A의 NAI seed 포함 캐시 해시를 사용. B의 구형 seed-less 해시 구현은 채택하지 않음.
 - 공식 저장소의 Android Maven mirror 설정, Gradle 메모리 설정, 공식 릴리즈 패키징 스크립트, 공식 빌드 버전은 보존. B 개발판의 1.0.1 버전 설정은 공식 1.0.0 빌드 계보에 덮어쓰지 않음.
 - A/B의 self-hosted runner 및 저장소 동기화 workflow는 가져오지 않음. 새 브랜치 생성/기존 브랜치 병합/공개 릴리즈 생성은 하지 않음.
-- backend 소스는 기존 pinned archive + `embed_imagegen_backend.py`로 빌드 시 생성하여 APK에 포함. 공식 APK workflow에도 같은 embed 단계를 둠.
+- backend 0.8.4의 43개 소스/리소스 파일을 A 계보의 검증된 bundle manifest와 함께 공식 저장소에 그대로 고정(vendored)하여 APK에 포함. CI는 더 오래된 mods.zip으로 이를 덮어쓰지 않고 bundle hash를 검증한다. 기존 `embed_imagegen_backend.py`는 복구용으로 남기되, 검토 없이 기존 bundle을 덮어쓰지 못하도록 기본 동작을 보호.
 
 ## 검증 범위와 명시적 한계
 

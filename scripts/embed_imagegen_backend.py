@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Extract the pinned Image Studio backend from the user's forensic mods.zip into APK assets."""
+"""Legacy pinned-archive extractor; refuses to overwrite reviewed vendored assets by default."""
 from __future__ import annotations
 
 import hashlib
@@ -54,6 +54,8 @@ def extract(archive: Path, output: Path) -> None:
         fail("mods.zip SHA-256 mismatch: " + actual_archive_hash)
 
     if output.exists():
+        if os.environ.get("WAYWARD_ALLOW_BACKEND_REPLACE") != "1":
+            fail("refusing to overwrite the reviewed vendored backend; set WAYWARD_ALLOW_BACKEND_REPLACE=1 only after reviewing the complete bundle diff")
         shutil.rmtree(output)
     output.parent.mkdir(parents=True, exist_ok=True)
     staging = Path(tempfile.mkdtemp(prefix="imagegen-assets-", dir=str(output.parent)))

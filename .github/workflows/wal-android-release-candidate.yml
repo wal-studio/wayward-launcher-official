@@ -51,16 +51,6 @@ jobs:
         shell: bash
         run: sdkmanager "platforms;android-35" "build-tools;35.0.0"
 
-      - name: Embed pinned NovelAI image-generation backend
-        shell: bash
-        run: |
-          set -euo pipefail
-          source_commit="26d6c32e0b0abbb886e3029efd548b7ca6774401"
-          curl --fail --location --silent --show-error \
-            "https://raw.githubusercontent.com/diethoon/wayward/${source_commit}/mods.zip" \
-            -o "$RUNNER_TEMP/wayward-mods.zip"
-          python3 scripts/embed_imagegen_backend.py "$RUNNER_TEMP/wayward-mods.zip"
-
       - name: Set up Gradle 8.9
         uses: gradle/actions/setup-gradle@v6
         with:
