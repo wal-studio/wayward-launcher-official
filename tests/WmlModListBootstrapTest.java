@@ -1,5 +1,10 @@
 package com.wayward.launcher;
 
+import java.io.ByteArrayInputStream;
+import java.io.InputStream;
+import java.io.IOException;
+import java.nio.charset.StandardCharsets;
+
 public final class WmlModListBootstrapTest {
     private static void check(boolean condition, String message) {
         if (!condition) throw new AssertionError(message);
@@ -11,6 +16,18 @@ public final class WmlModListBootstrapTest {
                 + "  " + quote + "addon-compat" + quote + ",\n"
                 + "  " + quote + "imagestudio:off" + quote + ", // keep this state\n"
                 + "]);\n";
+        final boolean[] originalClosed = { false };
+        InputStream trackedSource = new ByteArrayInputStream(fixture.getBytes(StandardCharsets.UTF_8)) {
+            @Override public void close() throws IOException {
+                originalClosed[0] = true;
+                super.close();
+            }
+        };
+        try (InputStream patchedStream = WmlModListBootstrap.patch(trackedSource)) {
+            patchedStream.readAllBytes();
+        }
+        check(originalClosed[0], "buffered source stream must be closed after response patching");
+
         String patched = WmlModListBootstrap.ensureCloudSaveEnabled(fixture);
         check(WmlModListBootstrap.hasCloudSaveEntry(patched), "CloudSave must be added to the enable list");
         check(patched.contains(quote + "addon-compat" + quote), "existing enabled mods must be preserved");
