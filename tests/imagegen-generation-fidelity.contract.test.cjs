@@ -17,6 +17,7 @@ assert.match(proxy, /out\.write\(requestBody\)/);
 assert.match(directNai, /Base64\.decode\(bodyBase64/);
 assert.match(directNai, /output\.write\(requestBody\)/);
 assert.match(imageRoute, /const requestPrompt = body\.prompt/);
+assert.match(imageRoute, /base\.imageUrl = imageUrlFor\(job\.media\.relativePath\)/);
 assert.match(imageRoute, /NovelAI_프롬프트만들기\(config, scenePrompt, naiNegativePrompt\)/);
 assert.match(imageRoute, /seed: body\.seed/);
 assert.match(jobRunner, /NovelAI_이미지생성하기\(config, job\.prompt, job\.negativePrompt \|\| '', args\.seed\)/);
@@ -28,6 +29,8 @@ for (const field of ['naiModel','naiWidth','naiHeight','naiSteps','naiScale','na
 }
 assert.match(naiClient, /seed: actualSeed/);
 assert.match(naiClient, /model: config\.naiModel/);
+assert.match(settingsRoute, /unsupportedSettings: comfyOnly/);
+assert.ok(settingsRoute.includes("'loras'"), 'NAI mode must explicitly report Comfy-only LoRA settings as unsupported');
 assert.match(main, /NovelAiRequestProxy\.dispatch/);
 assert.match(main, /serveGeneratedImageRequest\(path, imageDiagnostics\)/);
 assert.match(main, /path\.startsWith\("\/images\/__wayward_generated__\/"\)/);

@@ -14,7 +14,7 @@ A/B는 같은 공통 조상에서 갈라진 별도 계보이며, 한쪽이 다�
 ## A에서 가져온 제품 기능과 안전성 개선
 
 - `ImageGenProxy`: 게임의 `POST /api/image/generate` 본문을 JSON 재직렬화하거나 workflow를 강제로 덮어쓰지 않고 원문 바이트로 로컬 ImageGen 엔진에 전달.
-- NAI 엔진: NAI 모델, 크기, steps, guidance, sampler, noise schedule, 공통/작가/부정 프롬프트를 저장 설정에서 읽고, 사용자 seed를 생성 요청 및 캐시 해시에 반영.
+- NAI 엔진: NAI 모델, 크기, steps, guidance, sampler, noise schedule, 공통/작가/부정 프롬프트를 저장 설정에서 읽고, 사용자 seed를 생성 요청 및 캐시 해시에 반영. NAI 모드에서 Comfy 전용 LoRA/checkpoint 등은 capabilities 응답의 unsupportedSettings로 명시하며 허위 적용하지 않음.
 - 직접 NAI API 경로: Android Keystore 소유 토큰을 Authorization 헤더에만 주입하고, 게임 요청 본문은 그대로 전달.
 - ImageGen backend 설치/복구: 번들 manifest 무결성 검사와 APK 복구 smoke test, 진단 이벤트 보강.
 - Remote Play: 등록 세대(timestamp) 기반 폐기 처리, revocation stream, 오래된 요청이 새 페어링을 지우지 못하도록 하는 보호, 원격 생성 이미지 리소스 경로.
@@ -42,7 +42,7 @@ A/B는 같은 공통 조상에서 갈라진 별도 계보이며, 한쪽이 다�
 
 ## 검증 범위와 명시적 한계
 
-- CI에서 Node 계약 테스트, Bun 기반 NAI 요청 payload mock 테스트, Gradle 단위 테스트, Android 15 emulator instrumentation/UI smoke, 공식 variant 서명/패키지 검증을 수행하도록 구성.
+- CI에서 Node 계약 테스트, Bun 기반 NAI 요청 payload mock 테스트, Gradle 단위 테스트, Android 15 emulator instrumentation/UI smoke, 공식 variant 서명/패키지 검증과 서명된 공식 APK의 API 35 설치·실행 smoke를 수행하도록 구성.
 - NAI payload mock은 실제 NovelAI 계정 호출 없이 request body와 응답 bytes 전달을 검증한다. 실제 사용자 토큰으로 실제 초상화를 생성하는 실기기 end-to-end는 해당 토큰과 게임 세션이 없어 이 CI만으로 증명할 수 없다.
 - PC 게임 요청을 PC Host가 Android NAI 엔진으로 전달하는 역방향 job transport는 A 계보 문서에서도 미완료로 명시되어 있다. 이 Android APK 작업은 기존 로컬 Android NAI 파이프라인을 검증하며, 미구현 PC→모바일 NAI transport를 완료했다고 주장하지 않는다.
 - Cloudflare Worker 소스는 저장소에 포함하되 배포하지 않는다. 공개 릴리즈/Worker 배포는 별도 승인 대상이다.

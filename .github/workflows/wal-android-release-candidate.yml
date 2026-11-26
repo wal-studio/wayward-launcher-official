@@ -199,6 +199,39 @@ jobs:
           Write-Host "SIGNED OFFICIAL APK SHA256: $hash"
           Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY -Value "Signed Official APK created; SHA-256: $hash"
 
+      - name: Install and launch signed Official APK on Android 15 emulator
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 35
+          arch: x86_64
+          profile: pixel_6
+          disable-animations: true
+          script: |
+            set -euo pipefail
+            apk="dist/official/WAL-Android-Launcher-1.0.0.apk"
+            test -s "$apk"
+            unzip -l "$apk" | grep -F "assets/imagegen-backend/launcher-bundle.json"
+            adb install -r "$apk"
+            adb logcat -c
+            adb shell am start -W -n "com.wayward.launcher.official.wal/com.wayward.launcher.MainActivity"
+            pid=""
+            for attempt in $(seq 1 20); do
+              pid="$(adb shell pidof com.wayward.launcher.official.wal | tr -d '\r' || true)"
+              [[ -n "$pid" ]] && break
+              sleep 1
+            done
+            if [[ -z "$pid" ]]; then
+              adb logcat -d -t 5000 > "$RUNNER_TEMP/official-launch-logcat.txt"
+              cat "$RUNNER_TEMP/official-launch-logcat.txt"
+              exit 1
+            fi
+            if adb logcat -d -t 5000 | grep -A4 -B2 -F "Process: com.wayward.launcher.official.wal"; then
+              echo "Official APK crashed during startup." >&2
+              exit 1
+            fi
+            adb shell dumpsys activity activities | grep -F "com.wayward.launcher.official.wal"
+            echo "Official signed APK installed and launched successfully on API 35." >> "$GITHUB_STEP_SUMMARY"
+
       - name: Check physical device visibility
         shell: bash
         run: |

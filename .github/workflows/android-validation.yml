@@ -7,6 +7,7 @@ on:
       - 'docs/**'
       - '**/*.md'
       - '*.md'
+      - 'RUN_WAL_ANDROID_RELEASE_BUILD.txt'
   push:
     branches:
       - main
@@ -16,6 +17,7 @@ on:
       - 'docs/**'
       - '**/*.md'
       - '*.md'
+      - 'RUN_WAL_ANDROID_RELEASE_BUILD.txt'
   workflow_dispatch:
 
 permissions:
@@ -29,7 +31,7 @@ jobs:
   android:
     name: Android build and OAuth bridge checks
     runs-on: ubuntu-latest
-    timeout-minutes: 35
+    timeout-minutes: 50
     steps:
       - name: Checkout
         uses: actions/checkout@v7
