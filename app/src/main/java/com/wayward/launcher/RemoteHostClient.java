@@ -336,6 +336,92 @@ final class RemoteHostClient {
         return response;
     }
 
+    /** Raw ImageGen transport: preserves request bytes and response bytes without JSON conversion. */
+    static JSONObject requestAuthenticatedRawEnvelope(Context context, RemoteHostConnection host,
+            String path, String method, byte[] body, boolean hasBody, String contentType,
+            Map<String, String> requestHeaders) throws Exception {
+        String token = authenticate(context, host);
+        JSONObject response = requestRawEnvelope(host, path, method, body, hasBody,
+                contentType, requestHeaders, "Bearer " + token);
+        if (response.optInt("status", 0) == HttpURLConnection.HTTP_UNAUTHORIZED) {
+            clearSession();
+            token = authenticate(context, host);
+            response = requestRawEnvelope(host, path, method, body, hasBody,
+                    contentType, requestHeaders, "Bearer " + token);
+        }
+        return response;
+    }
+
+    private static JSONObject requestRawEnvelope(RemoteHostConnection host, String path,
+            String method, byte[] body, boolean hasBody, String contentType,
+            Map<String, String> requestHeaders, String authorization) throws Exception {
+        if (path == null || !path.startsWith("/") || path.startsWith("//") ||
+                path.contains("\\\\") || path.contains("/../") || path.endsWith("/..")) {
+            throw new IllegalArgumentException("Invalid ImageGen Host path.");
+        }
+        URL url = new URL(host.baseUrl.trim().replaceAll("/+$", "") + path);
+        if (!"https".equalsIgnoreCase(url.getProtocol()))
+            throw new SecurityException("Remote Host transport must use HTTPS.");
+        HttpsURLConnection connection = (HttpsURLConnection) url.openConnection();
+        connection.setConnectTimeout(CONNECT_TIMEOUT_MS);
+        connection.setReadTimeout(15 * 60 * 1000);
+        connection.setRequestMethod(method);
+        connection.setInstanceFollowRedirects(false);
+        connection.setUseCaches(false);
+        connection.setRequestProperty("Accept", "*/*");
+        configurePinnedTls(connection, host.certificateSha256);
+        if (authorization != null) connection.setRequestProperty("Authorization", authorization);
+        if (requestHeaders != null) {
+            for (Map.Entry<String, String> entry : requestHeaders.entrySet()) {
+                String name = entry.getKey();
+                String value = entry.getValue();
+                if (name == null || value == null || value.isEmpty()) continue;
+                String lower = name.toLowerCase(java.util.Locale.ROOT);
+                if (lower.equals("authorization") || lower.equals("cookie") ||
+                        lower.equals("host") || lower.equals("connection") ||
+                        lower.equals("content-length") || lower.equals("transfer-encoding") ||
+                        lower.startsWith("proxy-") || lower.equals("upgrade") ||
+                        lower.equals("expect")) continue;
+                connection.setRequestProperty(name, value);
+            }
+        }
+        if (hasBody) {
+            connection.setDoOutput(true);
+            if (contentType != null && !contentType.isEmpty())
+                connection.setRequestProperty("Content-Type", contentType);
+            byte[] payload = body == null ? new byte[0] : body;
+            connection.setFixedLengthStreamingMode(payload.length);
+            try (OutputStream output = connection.getOutputStream()) {
+                output.write(payload);
+                output.flush();
+            }
+        }
+        try {
+            int status = connection.getResponseCode();
+            InputStream stream = status >= 200 && status < 300
+                    ? connection.getInputStream() : connection.getErrorStream();
+            byte[] bytes = readLimited(stream, 64 * 1024 * 1024);
+            try {
+                JSONObject headers = new JSONObject();
+                for (String name : new String[] {"Content-Type", "Cache-Control", "ETag",
+                        "Last-Modified", "Retry-After", "Content-Disposition", "Content-Range",
+                        "Accept-Ranges", "Location", "X-Request-ID"}) {
+                    String value = connection.getHeaderField(name);
+                    if (value != null) headers.put(name, value);
+                }
+                return new JSONObject()
+                        .put("status", status)
+                        .put("statusText", connection.getResponseMessage() == null ? "" : connection.getResponseMessage())
+                        .put("headers", headers)
+                        .put("bodyBase64", android.util.Base64.encodeToString(bytes, android.util.Base64.NO_WRAP));
+            } finally {
+                java.util.Arrays.fill(bytes, (byte) 0);
+            }
+        } finally {
+            connection.disconnect();
+        }
+    }
+
     private static JSONObject requestJsonEnvelope(RemoteHostConnection host, String path,
             String method, JSONObject body, String authorization) throws Exception {
         HttpsURLConnection connection = openPinned(host, path, method, body, authorization, null);
