@@ -21,7 +21,7 @@ export interface CharacterPrompt extends CharacterLoraSettings {
 
 export interface GenerationSettings {
   version: number
-  imageProvider: 'sdxl' | 'anima' | 'nai' | 'launcher'
+  imageProvider: 'sdxl' | 'anima' | 'nai'
   naiToken: string
   naiModel: string
   naiWidth: number
@@ -172,7 +172,7 @@ function clean(raw: Partial<GenerationSettings>, base: GenerationSettings): Gene
     && path.resolve(modelsDirectory, 'loras').toLowerCase() === path.resolve(loraDirectory).toLowerCase())
   return {
     version: 19,
-    imageProvider: base.imageProvider === 'launcher' ? 'launcher' : raw.imageProvider === 'nai' ? 'nai' : raw.imageProvider === 'anima' ? 'anima' : 'sdxl',
+    imageProvider: raw.imageProvider === 'nai' ? 'nai' : raw.imageProvider === 'anima' ? 'anima' : raw.imageProvider === 'sdxl' ? 'sdxl' : base.imageProvider,
     // 화면의 토큰 빈칸은 기존 값을 유지합니다. 삭제는 별도 명시 요청으로 처리합니다.
     naiToken: raw.naiToken === undefined || raw.naiToken === '' ? base.naiToken : String(raw.naiToken).trim(),
     naiModel: String(raw.naiModel ?? base.naiModel),

@@ -34,19 +34,13 @@
     return runtimeStatus().ready;
   }
 
-  function managedApiEndpoint(path, directNovelAi) {
+  function managedApiEndpoint(path) {
     const raw = String(path || "").trim();
     if (!raw || raw.indexOf("\\") >= 0 || raw.indexOf("\0") >= 0) return null;
     try {
       const url = new URL(raw, LOCAL_ORIGIN + "/");
-      if (url.pathname.startsWith("/api/")) return LOCAL_ORIGIN + url.pathname + url.search;
-      if (!directNovelAi || url.search || url.hash) return null;
-      const allowed = [
-        "/ai/generate-image", "/ai/generate-image-stream", "/ai/augment-image", "/ai/upscale",
-        "/oa/v1/images/generations"
-      ];
-      if (!allowed.includes(url.pathname)) return null;
-      return LOCAL_ORIGIN + "/api/nai-compat" + url.pathname;
+      if (!url.pathname.startsWith("/api/")) return null;
+      return LOCAL_ORIGIN + url.pathname + url.search;
     } catch (_) { return null; }
   }
 
@@ -87,13 +81,8 @@
         url = new URL(request.url, window.location.href);
       } catch (_) { return previousFetch(input, init); }
 
-      const savedBackend = String(gameSettings().imageBackendUrl || "").trim();
-      let savedOrigin = "";
-      try { savedOrigin = savedBackend ? new URL(savedBackend).origin : ""; } catch (_) {}
-      const targetsSavedBackend = !!savedOrigin && url.origin === savedOrigin;
       const localApi = (url.origin === LOCAL_ORIGIN || url.origin === "http://localhost:8189")
         && url.pathname.startsWith("/api/");
-      const knownImageApi = /^\/api\/(batch|generation|image|queue)(?:\/|$)/i.test(url.pathname);
       const directNovelAiGeneration = url.protocol === "https:"
         && url.hostname.toLowerCase() === "image.novelai.net"
         && request.method.toUpperCase() === "POST"
@@ -102,8 +91,6 @@
           "/oa/v1/images/generations"
         ].includes(url.pathname);
 
-      // Preserve the allowlisted original CDN URL. MainActivity validates the
-      // returned bytes and applies the SAF/ZIP fallback in shouldInterceptRequest.
       if (isAllowedDefaultCharacterCdnUrl(url, request.method, rawInputUrl || request.url)) {
         const cdnRequest = new Request(url.toString(), {
           method: request.method,
@@ -118,17 +105,12 @@
         return previousFetch(cdnRequest);
       }
 
-      // Direct image fetches are routed through the same game-origin path as
-      // <img> and CSS requests. OFF => local image pack; ON => generated cache.
       if (url.pathname.startsWith("/images/")) {
         const generatedPrefix = "/images/__wayward_generated__/";
         const relative = url.pathname.startsWith(generatedPrefix)
           ? url.pathname.slice(generatedPrefix.length)
           : url.pathname.slice("/images/".length);
         const serverReady = runtimeStatus().ready;
-        // A URL from the launcher's local image server is a generated result, not a
-        // PC/local image-pack asset. Keep its app-private cache reachable through the
-        // HTTPS game-origin anchor even after the generation process is stopped.
         const fromLauncherImageServer = url.origin === LOCAL_ORIGIN
           || url.origin === "http://localhost:8189";
         const targetPath = serverReady || fromLauncherImageServer
@@ -137,21 +119,25 @@
         return previousFetch(new Request(targetUrl, request));
       }
 
-      if (!targetsSavedBackend && !localApi && !knownImageApi && !directNovelAiGeneration) return previousFetch(input, init);
+      if (directNovelAiGeneration) {
+        return Promise.resolve(new Response(JSON.stringify({
+          error: "직접 NovelAI API 호출은 지원하지 않습니다. ImageGen의 /api/image/generate 경로를 사용하세요."
+        }), { status: 503, headers: { "Content-Type": "application/json; charset=utf-8" } }));
+      }
+      if (!localApi) return previousFetch(input, init);
 
-      const mapped = managedApiEndpoint(url.pathname + url.search, directNovelAiGeneration);
+      const mapped = managedApiEndpoint(url.pathname + url.search);
       if (!runtimeStatus().ready) {
         return Promise.resolve(new Response(JSON.stringify({
-          error: "이미지 생성 서버가 꺼져 있습니다. 이미지팩 전용 모드에서는 외부 생성 주소를 호출하지 않습니다."
+          error: "이미지 생성 서버가 꺼져 있습니다. 이미지팩 전용 모드에서는 생성 요청을 허용하지 않습니다."
         }), { status: 503, headers: { "Content-Type": "application/json; charset=utf-8" } }));
       }
       if (!mapped) {
         return Promise.resolve(new Response(JSON.stringify({
-          error: "등록된 외부 이미지 생성 주소는 사용할 수 없습니다. 런처 관리 서버만 지원합니다."
+          error: "런처가 소유한 /api/ 경로만 지원합니다."
         }), { status: 503, headers: { "Content-Type": "application/json; charset=utf-8" } }));
       }
-      const redirected = new Request(mapped, request);
-      return previousFetch(redirected);
+      return previousFetch(new Request(mapped, request));
     };
   }
 
@@ -390,6 +376,39 @@
     if (!store || typeof store.getState !== "function") return store;
     try {
       const originalGetState = store.getState.bind(store);
+      const actionCache = new WeakMap();
+      function guardPartial(partial) {
+        if (!partial || typeof partial !== "object" || Array.isArray(partial)) return partial;
+        const running = runtimeStatus().ready;
+        const values = {
+          imageBackendMode: running ? "custom" : "off",
+          imageBackendUrl: running ? LOCAL_ORIGIN : ""
+        };
+        let changed = false;
+        const next = { ...partial };
+        for (const key of ["imageBackendMode", "imageBackendUrl"]) {
+          if (Object.prototype.hasOwnProperty.call(partial, key)) {
+            next[key] = values[key];
+            changed = true;
+          }
+        }
+        return changed ? next : partial;
+      }
+      function wrapSet(originalSet) {
+        if (typeof originalSet !== "function") return originalSet;
+        const cached = actionCache.get(originalSet);
+        if (cached) return cached;
+        const wrapped = function(partialOrUpdater, ...rest) {
+          const guarded = typeof partialOrUpdater === "function"
+            ? function(...args) {
+                return guardPartial(Reflect.apply(partialOrUpdater, this, args));
+              }
+            : guardPartial(partialOrUpdater);
+          return Reflect.apply(originalSet, this, [guarded, ...rest]);
+        };
+        actionCache.set(originalSet, wrapped);
+        return wrapped;
+      }
       const facade = Object.create(store);
       Object.defineProperty(facade, "getState", {
         configurable: true,
@@ -397,12 +416,16 @@
         writable: true,
         value() {
           const state = originalGetState();
-          // The launcher's running engine is authoritative. Keep the persisted
-          // game preference untouched while allowing this session to generate.
+          if (!state || typeof state !== "object" || Array.isArray(state)) {
+            return {
+              imageBackendMode: runtimeStatus().ready ? "custom" : "off",
+              imageBackendUrl: runtimeStatus().ready ? LOCAL_ORIGIN : ""
+            };
+          }
           const running = runtimeStatus().ready;
-          if (!state) return { imageBackendMode: running ? "custom" : "off", imageBackendUrl: running ? LOCAL_ORIGIN : "" };
           return {
             ...state,
+            ...(typeof state.set === "function" ? { set: wrapSet(state.set) } : {}),
             imageBackendMode: running ? "custom" : "off",
             imageBackendUrl: running ? LOCAL_ORIGIN : ""
           };

@@ -70,7 +70,7 @@ public class MainActivity extends Activity {
     private static final int PICK_TREE=4101, PICK_MOD_ZIP=4102, REQUEST_NAI_SETTINGS=4104;
     private static final int REQUEST_GOOGLE_AUTH_MIN=60000, REQUEST_GOOGLE_AUTH_MAX=65534;
     private static final String PREFS="wayward_launcher";
-    private static final String KEY_TREE="game_tree_uri", KEY_PROFILES="game_profiles", KEY_ZIP_REV="zip_mod_revision", KEY_COMFY_URL="comfy_server_url", KEY_IMAGE_MODE="image_server_mode";
+    private static final String KEY_TREE="game_tree_uri", KEY_PROFILES="game_profiles", KEY_ZIP_REV="zip_mod_revision", KEY_COMFY_URL="comfy_server_url", KEY_IMAGE_MODE="image_server_mode", KEY_FLUX_URL="flux_worker_url";
     private static final String IMAGE_MODE_PACKS_ONLY="image-packs-only", IMAGE_MODE_GENERATION="image-generation", IMAGE_MODE_REMOTE_PC="remote-pc";
     private static final int MAX_DEFAULT_CHARACTER_CDN_REDIRECTS=3, MAX_DEFAULT_CHARACTER_CDN_BYTES=12*1024*1024;
     interface DefaultCharacterCdnConnectionFactory {
@@ -566,7 +566,7 @@ public class MainActivity extends Activity {
         if(settingsAction!=null){
             TextView gear=uiText("⚙",21,Color.rgb(91,99,105),false);
             gear.setGravity(android.view.Gravity.CENTER);
-            gear.setContentDescription("NovelAI 토큰 설정");
+            gear.setContentDescription(BuildConfig.WAL_FLUX_TEST?"FLUX Worker 주소 설정":"NovelAI 토큰 설정");
             gear.setMinWidth(dp(48));
             gear.setMinHeight(dp(48));
             gear.setClickable(true);
@@ -589,7 +589,11 @@ public class MainActivity extends Activity {
         boolean packsSelected=IMAGE_MODE_PACKS_ONLY.equals(mode);
         String token="";
         try{ token=NovelAiTokenStore.readToken(this); }catch(Exception ignored){}
-        boolean tokenReady=token!=null&&!token.isEmpty();
+        boolean tokenReady=BuildConfig.WAL_FLUX_TEST?!fluxWorkerUrl(this).isEmpty():(token!=null&&!token.isEmpty());
+        String providerLabel=BuildConfig.WAL_FLUX_TEST?"FLUX Worker":"NovelAI";
+        String providerSubtitle=BuildConfig.WAL_FLUX_TEST
+                ?(tokenReady?"Worker 주소 등록됨 · 터치해 서버 실행":"Worker 주소 미등록 · 눌러 주소 입력")
+                :(tokenReady?"토큰 등록됨 · 터치해 서버 실행":"토큰 미등록 · 눌러 계정 연결");
         if(imageModeStatus!=null){
             String message;
             if(imageModeTransitionInProgress) message="서버 전환 중 · 기존 서버를 종료하고 새 모드를 적용합니다.";
@@ -606,7 +610,7 @@ public class MainActivity extends Activity {
         serverRow.setOrientation(LinearLayout.HORIZONTAL);
         serverRow.setGravity(android.view.Gravity.CENTER_VERTICAL);
         View server=glassModeTile(generationSelected?"이미지 생성 서버 실행 중":"이미지 생성 서버 실행",
-                generationSelected?"NovelAI 연결됨 · 다시 터치하면 종료":(tokenReady?"토큰 등록됨 · 터치해 서버 실행":"토큰 미등록 · 눌러 계정 연결"),
+                generationSelected?providerLabel+" 연결됨 · 다시 터치하면 종료":providerSubtitle,
                 generationSelected,this::openNovelAiSettings,()->{
                     if(IMAGE_MODE_GENERATION.equals(currentImageMode())&&localImageServerActive()) switchToImagePacksOnly();
                     else switchToImageGenerationMode();
@@ -890,10 +894,56 @@ public class MainActivity extends Activity {
     }
 
     private void openNovelAiSettings(){
+        if(BuildConfig.WAL_FLUX_TEST){openFluxEndpointSettings();return;}
         startActivityForResult(new Intent(this,NovelAiSettingsActivity.class),REQUEST_NAI_SETTINGS);
     }
 
+    private void openFluxEndpointSettings(){
+        if(!BuildConfig.WAL_FLUX_TEST)return;
+        EditText input=new EditText(this);
+        input.setSingleLine(true);
+        input.setInputType(android.text.InputType.TYPE_CLASS_TEXT|android.text.InputType.TYPE_TEXT_VARIATION_URI);
+        input.setHint("https://your-worker.workers.dev");
+        String saved=getSharedPreferences(PREFS,MODE_PRIVATE).getString(KEY_FLUX_URL,"");
+        input.setText(saved);
+        new android.app.AlertDialog.Builder(this)
+                .setTitle("Cloudflare FLUX Worker 주소")
+                .setMessage("이미지 생성에 사용할 Worker HTTPS 주소만 입력하세요. API 키는 필요하지 않습니다. FLUX Worker는 prompt만 받아 고정 설정으로 이미지를 생성합니다.")
+                .setView(input)
+                .setNegativeButton("취소",null)
+                .setPositiveButton("저장",(dialog,which)->{
+                    String value=input.getText()==null?"":input.getText().toString().trim();
+                    try{
+                        java.net.URI uri=new java.net.URI(value);
+                        if(!"https".equalsIgnoreCase(uri.getScheme())||uri.getHost()==null
+                                ||uri.getUserInfo()!=null||uri.getQuery()!=null||uri.getFragment()!=null){
+                            throw new IllegalArgumentException("https:// 주소만 입력할 수 있습니다.");
+                        }
+                        while(value.endsWith("/"))value=value.substring(0,value.length()-1);
+                        if(value.isEmpty())throw new IllegalArgumentException("Worker 주소를 입력하세요.");
+                        getSharedPreferences(PREFS,MODE_PRIVATE).edit().putString(KEY_FLUX_URL,value).apply();
+                        Toast.makeText(this,"FLUX Worker 주소를 저장했습니다.",Toast.LENGTH_SHORT).show();
+                        renderImageModePanel();
+                        if(!localImageServerActive())switchImageServerMode(ImageServerModeCoordinator.Mode.LOCAL_IMAGE_GENERATION);
+                        else Toast.makeText(this,"실행 중인 서버에는 다음 재시작부터 새 주소가 적용됩니다.",Toast.LENGTH_LONG).show();
+                    }catch(Exception error){
+                        Toast.makeText(this,error.getMessage()==null?"Worker 주소가 올바르지 않습니다.":error.getMessage(),Toast.LENGTH_LONG).show();
+                    }
+                }).show();
+    }
+
+    static String fluxWorkerUrl(android.content.Context context){
+        if(context==null)return "";
+        return context.getSharedPreferences(PREFS,android.content.Context.MODE_PRIVATE)
+                .getString(KEY_FLUX_URL,"").trim();
+    }
+
     private void switchToImageGenerationMode(){
+        if(BuildConfig.WAL_FLUX_TEST){
+            if(fluxWorkerUrl(this).isEmpty()){openFluxEndpointSettings();return;}
+            switchImageServerMode(ImageServerModeCoordinator.Mode.LOCAL_IMAGE_GENERATION);
+            return;
+        }
         String token="";
         try{ token=NovelAiTokenStore.readToken(this); }
         catch(Exception error){
@@ -953,7 +1003,7 @@ public class MainActivity extends Activity {
                     }else if(mode==ImageServerModeCoordinator.Mode.IMAGE_PACKS_ONLY){
                         imageGenSessionMessage="이미지팩 전용 모드 · 모든 등록 서버의 중지 요청을 완료했습니다.";
                     }else if(mode==ImageServerModeCoordinator.Mode.LOCAL_IMAGE_GENERATION){
-                        imageGenSessionMessage="NovelAI 이미지 생성 서버가 준비되었습니다.";
+                        imageGenSessionMessage=BuildConfig.WAL_FLUX_TEST?"FLUX 이미지 생성 서버가 준비되었습니다.":"NovelAI 이미지 생성 서버가 준비되었습니다.";
                     }else if(mode==ImageServerModeCoordinator.Mode.REMOTE_PC){
                         imageGenSessionMessage="집 PC 서버 모드로 전환했습니다.";
                     }
@@ -986,6 +1036,21 @@ public class MainActivity extends Activity {
     }
 
     private void startLocalImageGenForMode(ImageServerModeCoordinator.Callback callback){
+        if(BuildConfig.WAL_FLUX_TEST){
+            String endpoint=fluxWorkerUrl(this);
+            if(endpoint.isEmpty()){
+                callback.onFailure("FLUX Worker 주소를 먼저 입력하세요.");
+                return;
+            }
+            try{
+                java.net.URI uri=new java.net.URI(endpoint);
+                if(!"https".equalsIgnoreCase(uri.getScheme())||uri.getHost()==null||uri.getUserInfo()!=null
+                        ||uri.getQuery()!=null||uri.getFragment()!=null)throw new IllegalArgumentException("Worker 주소가 올바르지 않습니다.");
+            }catch(Exception error){callback.onFailure("FLUX Worker 주소가 올바르지 않습니다: "+msg(error));return;}
+            startManagedImageGenServer("flux",endpoint);
+            waitForImageGenReadyForMode(callback,0);
+            return;
+        }
         try{
             String token=NovelAiTokenStore.readToken(this);
             if(token==null||token.isEmpty()){
@@ -1005,7 +1070,7 @@ public class MainActivity extends Activity {
         if(state.isReady()){callback.onSuccess();return;}
         if(attempt>=360){
             stopImageGenServerThen(new ImageServerModeCoordinator.Callback(){
-                @Override public void onSuccess(){callback.onFailure("NovelAI 이미지 생성 서버가 180초 안에 준비되지 않았습니다.");}
+                @Override public void onSuccess(){callback.onFailure((BuildConfig.WAL_FLUX_TEST?"FLUX":"NovelAI")+" 이미지 생성 서버가 180초 안에 준비되지 않았습니다.");}
                 @Override public void onFailure(String error){callback.onFailure("서버 시작 시간 초과 및 중지 실패: "+error);}
             });
             return;
@@ -2689,7 +2754,8 @@ public class MainActivity extends Activity {
     }
 
     private void startManagedImageGenServer(String mode,String comfyUrl){
-        if (!"novelai".equals(mode) && !"comfy".equals(mode)) {
+        if (!"novelai".equals(mode) && !"comfy".equals(mode)
+                && !(BuildConfig.WAL_FLUX_TEST && "flux".equals(mode))) {
             imageGenSessionMessage = "지원하지 않는 이미지 생성 서버 모드입니다.";
             refreshImageGenStatus();
             return;
@@ -2715,7 +2781,7 @@ public class MainActivity extends Activity {
 
         final File backend=imageGenBackendRoot();
         final String requestedUrl=comfyUrl==null?"":comfyUrl.trim();
-        imageGenSessionMessage=("novelai".equals(mode)?"NovelAI":"ComfyUI 연결")+" 런처 내장 서버를 준비하고 있습니다…";
+        imageGenSessionMessage=("flux".equals(mode)?"FLUX Worker":("novelai".equals(mode)?"NovelAI":"ComfyUI 연결"))+" 런처 내장 서버를 준비하고 있습니다…";
         refreshImageGenStatus();
         new Thread(()->{
             String failure=null;
@@ -2780,7 +2846,8 @@ public class MainActivity extends Activity {
         config.put("stateDir",new File(getFilesDir(),"imagegen/state").getAbsolutePath());
         String launcherComfyUrl=comfyUrl==null||comfyUrl.isEmpty()?"http://127.0.0.1:8188":comfyUrl;
         config.put("comfyUrl",launcherComfyUrl);
-        config.put("imageProvider","novelai".equals(mode)?"nai":"sdxl");
+        config.put("imageProvider",BuildConfig.WAL_FLUX_TEST&&"flux".equals(mode)?"flux":("novelai".equals(mode)?"nai":"sdxl"));
+        if(BuildConfig.WAL_FLUX_TEST&&"flux".equals(mode))config.put("fluxWorkerUrl",comfyUrl==null?"":comfyUrl.trim());
         config.put("naiModel","nai-diffusion-4-5-full");
         // Android has no bundled sharp binary; PNG is the supported no-dependency path.
         config.put("webp",false);
@@ -2814,8 +2881,9 @@ public class MainActivity extends Activity {
         byte[] bytes=java.nio.file.Files.readAllBytes(settingsFile.toPath());
         org.json.JSONObject settings=new org.json.JSONObject(new String(bytes,StandardCharsets.UTF_8));
         String savedWorkflow=settings.optString("imageProvider","sdxl");
-        String provider="novelai".equals(mode)?"nai":("anima".equalsIgnoreCase(savedWorkflow)?"anima":"sdxl");
+        String provider=BuildConfig.WAL_FLUX_TEST&&"flux".equals(mode)?"flux":("novelai".equals(mode)?"nai":("anima".equalsIgnoreCase(savedWorkflow)?"anima":"sdxl"));
         settings.put("imageProvider",provider);
+        if(BuildConfig.WAL_FLUX_TEST&&"flux".equals(mode))settings.put("fluxWorkerUrl",comfyUrl==null?"":comfyUrl.trim());
         settings.put("comfyUrl",comfyUrl);
         // Credentials are supplied by Android Keystore, never persisted here.
         settings.put("naiToken","");
@@ -2897,7 +2965,7 @@ public class MainActivity extends Activity {
             if (comfy && (endpoint == null || endpoint.trim().isEmpty())) {
                 imageGenStatus.setText("로컬 ComfyUI 중계 서버 실행됨 · PC 주소 미설정 · 연결 대기 중 · 127.0.0.1:8189");
             } else {
-                imageGenStatus.setText("런처 내장 ImageGen " + ImageGenBackendInstaller.VERSION + " 실행 중 · 127.0.0.1:8189");
+                imageGenStatus.setText("런처 내장 ImageGen " + ImageGenBackendInstaller.VERSION + " 실행 중 · "+(state.backendVersion.endsWith(":flux")?"FLUX Worker":"127.0.0.1:8189"));
             }
         }
         else if (state.isAvailable()) imageGenStatus.setText(state.message.isEmpty()
@@ -3159,10 +3227,6 @@ public class MainActivity extends Activity {
         }
         @JavascriptInterface public void imageGenProxyFetch(String requestId,String method,String path,String headersJson,String bodyBase64){
             boolean remotePcMode=IMAGE_MODE_REMOTE_PC.equals(currentImageMode());
-            if(!remotePcMode&&path!=null&&path.startsWith("/api/nai-compat/")){
-                NovelAiRequestProxy.dispatch(web,requestId,method,path,headersJson,bodyBase64);
-                return;
-            }
             ImageGenProxy.dispatch(web,requestId,method,path,headersJson,bodyBase64,remotePcMode);
         }
         @JavascriptInterface public String imageGenRuntimeStatus(){

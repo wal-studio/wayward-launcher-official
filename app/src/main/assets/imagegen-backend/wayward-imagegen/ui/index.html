@@ -152,9 +152,11 @@ async function loadHealth() {
     const res = await api('/api/image/health');
     const body = await res.json();
     state.capabilities = body.capabilities || [];
-    el('status').innerHTML =
-        `<b>${(body.images ?? 0).toLocaleString()}</b> images · ${body.imageProvider === 'nai' ? 'NovelAI' : 'ComfyUI'} ` +
-      (body.imageProvider === 'launcher' ? (body.comfyui === 'connected' ? 'ready' : '<b>launcher provider unavailable</b>') : body.imageProvider === 'nai' ? (body.novelai === 'configured' ? 'token saved · authentication not verified' : '<b>token missing</b>') : (body.comfyui === 'connected' ? 'ready' : '<b>ComfyUI not reachable</b>'));
+    const providerLabel = body.imageProvider === 'nai' ? 'NovelAI' : 'ComfyUI';
+    const providerStatus = body.imageProvider === 'nai'
+      ? (body.novelai === 'configured' ? 'token saved · authentication not verified' : '<b>token missing</b>')
+      : (body.comfyui === 'connected' ? 'ready' : '<b>ComfyUI not reachable</b>');
+    el('status').innerHTML = `<b>${(body.images ?? 0).toLocaleString()}</b> images · ${providerLabel} ${providerStatus}`;
       // A backend without a ready provider can still be reviewed — you cannot ask
     // for a new render, so say so rather than letting Redo fail silently.
     setBanner(body.comfyui === 'connected'

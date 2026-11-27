@@ -98,12 +98,7 @@ export interface Config {
   characterLoras: Record<string, CharacterLoraSettings>
 
   /** Saved provider for ordinary game images and conditional queues. */
-  imageProvider: 'sdxl' | 'anima' | 'nai' | 'launcher'
-  launcherProviderUrl: string
-  launcherProfileId: string
-  launcherProviderId: string
-  launcherProviderSignature: string
-  launcherProviderToken: string
+  imageProvider: 'sdxl' | 'anima' | 'nai'
   naiToken: string
   naiModel: string
   naiWidth: number
@@ -337,12 +332,7 @@ export function resolveConfig(argv: string[] = [], cwd = process.cwd()): Config 
     loraStrength: pickNum('lora-strength', 'COMFYUI_LORA_STRENGTH', 'loraStrength', 1),
     characterLoras: file.characterLoras ?? {},
 
-    imageProvider: file.imageProvider === 'launcher' ? 'launcher' : file.imageProvider === 'nai' ? 'nai' : file.imageProvider === 'anima' ? 'anima' : 'sdxl',
-    launcherProviderUrl: pick('launcher-provider-url', 'LAUNCHER_PROVIDER_URL', 'launcherProviderUrl', ''),
-    launcherProfileId: pick('launcher-profile-id', 'LAUNCHER_PROFILE_ID', 'launcherProfileId', ''),
-    launcherProviderId: pick('launcher-provider-id', 'LAUNCHER_PROVIDER_ID', 'launcherProviderId', ''),
-    launcherProviderSignature: pick('launcher-provider-signature', 'LAUNCHER_PROVIDER_SIGNATURE', 'launcherProviderSignature', ''),
-    launcherProviderToken: pick('launcher-provider-token', 'LAUNCHER_PROVIDER_TOKEN', 'launcherProviderToken', ''),
+    imageProvider: file.imageProvider === 'nai' ? 'nai' : file.imageProvider === 'anima' ? 'anima' : 'sdxl',
     naiToken: pick('nai-token', 'NAI_TOKEN', 'naiToken', ''),
     naiModel: pick('nai-model', 'NAI_MODEL', 'naiModel', 'nai-diffusion-5-full'),
     naiWidth: pickNum('nai-width', 'NAI_WIDTH', 'naiWidth', 832),

@@ -2,7 +2,7 @@ name: Official Android validation
 
 on:
   pull_request:
-    branches: [main, 'work/**']
+    branches: [main, work, 'work/**']
     paths-ignore:
       - 'docs/**'
       - '**/*.md'
@@ -11,6 +11,7 @@ on:
   push:
     branches:
       - main
+      - work
       - 'work/**'
       - 'fix/**'
     paths-ignore:
@@ -121,6 +122,7 @@ jobs:
           node tests/imagegen-generation-fidelity.contract.test.cjs
           node tests/novelai-direct-api-proxy.contract.test.cjs
           node tests/imagegen-backend-bundle-integrity.test.cjs
+          node tests/flux-test-provider-contract.test.cjs
           node tests/default-character-cdn-fallback.contract.test.cjs
           node tests/diagnostics-consent-contract.test.mjs
           node tests/diagnostics-retention.test.mjs
@@ -277,7 +279,7 @@ jobs:
         env:
           ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
           ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
-        run: gradle --no-daemon --stacktrace clean testDebugUnitTest assembleDebug assembleRelease
+        run: gradle --no-daemon --stacktrace clean testDebugUnitTest testOfficialUnitTest testFluxTestUnitTest assembleDebug assembleRelease assembleOfficial assembleFluxTest
 
       - name: Verify WAL branding in Debug and Release APKs
         shell: bash
@@ -320,6 +322,31 @@ jobs:
           grep -F "package: name='com.wayward.launcher.official.debug' versionCode='109' versionName='1.0.9-debug'" "$RUNNER_TEMP/debug-badging.txt"
           grep -F "package: name='com.wayward.launcher.official' versionCode='109' versionName='1.0.9'" "$RUNNER_TEMP/release-badging.txt"
 
+      - name: Verify Official and FLUX Test APKs and isolated backend bundles
+        shell: bash
+        run: |
+          set -euo pipefail
+          aapt="$ANDROID_HOME/build-tools/35.0.0/aapt"
+          official_apk="app/build/outputs/apk/official/app-official.apk"
+          flux_apk="app/build/outputs/apk/fluxTest/app-fluxTest.apk"
+          test -s "$official_apk"
+          test -s "$flux_apk"
+          "$aapt" dump badging "$official_apk" > "$RUNNER_TEMP/official-badging.txt"
+          "$aapt" dump badging "$flux_apk" > "$RUNNER_TEMP/flux-test-badging.txt"
+          grep -F "application-label:'WAL Android Launcher'" "$RUNNER_TEMP/official-badging.txt"
+          grep -F "com.wayward.launcher.official.wal" "$RUNNER_TEMP/official-badging.txt"
+          grep -F "application-label:'WAL FLUX Test'" "$RUNNER_TEMP/flux-test-badging.txt"
+          grep -F "com.wayward.launcher.official" "$RUNNER_TEMP/flux-test-badging.txt"
+          grep -F "fluxtest" "$RUNNER_TEMP/flux-test-badging.txt"
+          unzip -p "$official_apk" assets/imagegen-backend/launcher-bundle.json > "$RUNNER_TEMP/official-backend-manifest.json"
+          unzip -p "$flux_apk" assets/imagegen-backend/launcher-bundle.json > "$RUNNER_TEMP/flux-backend-manifest.json"
+          cmp app/src/main/assets/imagegen-backend/launcher-bundle.json "$RUNNER_TEMP/official-backend-manifest.json"
+          cmp app/src/fluxTest/assets/imagegen-backend/launcher-bundle.json "$RUNNER_TEMP/flux-backend-manifest.json"
+          ! grep -q '"fluxTestOnly": true' "$RUNNER_TEMP/official-backend-manifest.json"
+          grep -q '"fluxTestOnly": true' "$RUNNER_TEMP/flux-backend-manifest.json"
+          sha256sum "$official_apk" "$flux_apk"
+          stat -c '%n %s bytes' "$official_apk" "$flux_apk"
+
       - name: Verify signed Release APK identity
         if: env.RELEASE_SIGNING_CONFIGURED == 'true'
         shell: bash
@@ -333,14 +360,20 @@ jobs:
           expected_sha1="D9BE7443EB247D27C958CC4250D7F5D1E078F740"
           test "$actual_sha1" = "$expected_sha1"
           echo "Release APK signature matches the registered Android OAuth SHA-1." >> "$GITHUB_STEP_SUMMARY"
+          official_apk="app/build/outputs/apk/official/app-official.apk"
+          test -s "$official_apk"
+          "$ANDROID_HOME/build-tools/35.0.0/apksigner" verify --verbose --print-certs "$official_apk" > "$RUNNER_TEMP/official-signing.txt"
+          official_sha1="$(awk -F': ' '/Signer #1 certificate SHA-1 digest:/ {gsub(/:/, "", $2); gsub(/[[:space:]]/, "", $2); print toupper($2); exit}' "$RUNNER_TEMP/official-signing.txt")"
+          test "$official_sha1" = "$expected_sha1"
+          echo "Official APK signature matches the registered Android OAuth SHA-1." >> "$GITHUB_STEP_SUMMARY"
 
-      - name: Upload Debug and Release APKs
+      - name: Upload Official and FLUX Test APKs
         uses: actions/upload-artifact@v7
         with:
-          name: wayward-launcher-official-apks
+          name: wayward-launcher-official-and-flux-test-apks
           path: |
-            app/build/outputs/apk/debug/*.apk
-            app/build/outputs/apk/release/*.apk
+            app/build/outputs/apk/official/*.apk
+            app/build/outputs/apk/fluxTest/*.apk
           if-no-files-found: error
           retention-days: 14
 

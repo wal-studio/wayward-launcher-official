@@ -39,7 +39,7 @@ final class ImageGenProxy {
         }
         final android.content.Context appContext=web.getContext().getApplicationContext();
         final String apiPath=Uri.parse(safePath).getPath();
-        final String localPath=stripGameProviderEndpointOverrides(safePath);
+        final String localPath=safePath;
         if (remotePcMode) {
             if ("/api/nai/check".equals(apiPath)) {
                 deliver(web, requestId, "POST".equals(safeMethod)
@@ -97,7 +97,8 @@ final class ImageGenProxy {
         ImageGenStatusStore.State runtime=ImageGenStatusStore.read(appContext.getFilesDir());
         String[] runtimeParts=runtime.backendVersion.split(":");
         String launcherMode=runtimeParts.length>=3?runtimeParts[2]:"";
-        if(!"novelai".equals(launcherMode)&&!"comfy".equals(launcherMode)){
+        if(!"novelai".equals(launcherMode)&&!"comfy".equals(launcherMode)
+                &&!(BuildConfig.WAL_FLUX_TEST&&"flux".equals(launcherMode))){
             deliver(web,requestId,errorResponse(503,"런처가 선택한 이미지 공급자 상태를 확인할 수 없습니다."));
             return;
         }
@@ -134,7 +135,8 @@ final class ImageGenProxy {
                         // Reuse launcherMode validated above; redeclaring it here breaks Java compilation.
                         String selectedWorkflow = settings.optString("imageProvider", "sdxl");
                         String provider = "novelai".equals(launcherMode) ? "nai"
-                                : "comfy".equals(launcherMode) ? ("anima".equals(selectedWorkflow) ? "anima" : "sdxl") : null;
+                                : "comfy".equals(launcherMode) ? ("anima".equals(selectedWorkflow) ? "anima" : "sdxl")
+                                : BuildConfig.WAL_FLUX_TEST && "flux".equals(launcherMode) ? "flux" : null;
                         if (provider == null) {
                             deliver(web, requestId, errorResponse(503, "런처가 선택한 이미지 공급자를 확인할 수 없습니다."));
                             return;
@@ -142,12 +144,9 @@ final class ImageGenProxy {
                         settings.remove("naiToken");
                         settings.remove("naiTokenClear");
                         settings.remove("comfyUrl");
-                        settings.remove("launcherProviderUrl");
-                        settings.remove("launcherProfileId");
-                        settings.remove("launcherProviderId");
-                        settings.remove("launcherProviderSignature");
-                        settings.remove("launcherProviderToken");
                         settings.put("imageProvider", provider);
+                        if(BuildConfig.WAL_FLUX_TEST&&"flux".equals(launcherMode))
+                            settings.put("fluxWorkerUrl",MainActivity.fluxWorkerUrl(appContext));
                         requestBody = settings.toString().getBytes(StandardCharsets.UTF_8);
                         DiagnosticsLogger.event(appContext, "INFO", "imagegen_proxy",
                                 "game_generation_settings_locked_to_launcher", null);
@@ -272,21 +271,6 @@ final class ImageGenProxy {
         String safe = value.replaceAll("(?i)(Bearer\\s+)[A-Za-z0-9._~+/-]+=*", "$1[REDACTED]");
         safe = safe.replaceAll("(?i)(\\b(?:NAI_TOKEN|TOKEN|API[_-]?KEY|APIKEY|ACCESS[_-]?TOKEN|REFRESH[_-]?TOKEN|AUTHORIZATION|PASSWORD|SECRET)\\b\\s*[=:]\\s*)[^\\s,;]+", "$1[REDACTED]");
         return safe.replace('\r', ' ').replace('\n', ' ');
-    }
-
-    private static String stripGameProviderEndpointOverrides(String path) {
-        Uri uri=Uri.parse("http://127.0.0.1"+path);
-        String endpoint=uri.getPath();
-        if(!"/api/generation/resources".equals(endpoint)
-                && !"/api/generation/prompt-batch-support".equals(endpoint))return path;
-        Uri.Builder builder=uri.buildUpon().clearQuery();
-        for(String name:uri.getQueryParameterNames()){
-            if("comfyUrl".equalsIgnoreCase(name))continue;
-            for(String value:uri.getQueryParameters(name))builder.appendQueryParameter(name,value);
-        }
-        Uri sanitized=builder.build();
-        return sanitized.getEncodedPath()
-                +(sanitized.getEncodedQuery()==null?"":"?"+sanitized.getEncodedQuery());
     }
 
     private static String validatePath(String raw) {

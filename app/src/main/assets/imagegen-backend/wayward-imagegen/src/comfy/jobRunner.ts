@@ -68,56 +68,6 @@ export interface GenerationJob {
 /** Completed jobs linger this long so a client poll can still collect them. */
 const JOB_TTL_MS = 60_000
 
-async function launcherGenerate(
-  config: Config,
-  args: SubmitArgs,
-  requestId: string,
-): Promise<{ bytes: Buffer; filename: string }> {
-  const endpoint = new URL(config.launcherProviderUrl)
-  if (endpoint.protocol !== 'http:' || endpoint.hostname !== '127.0.0.1'
-    || endpoint.port !== '8190' || endpoint.pathname !== '/generate'
-    || endpoint.username || endpoint.password || endpoint.search || endpoint.hash) {
-    throw new Error('런처 이미지 서비스 주소가 안전한 로컬 어댑터 주소가 아닙니다.')
-  }
-  if (!/^[a-f0-9]{32}$/.test(config.launcherProfileId) || !/^[a-f0-9]{32}$/.test(config.launcherProviderId)
-    || typeof config.launcherProviderToken !== 'string' || config.launcherProviderToken.length < 40) {
-    throw new Error('런처 이미지 서비스 프로필 또는 공급자 ID가 올바르지 않습니다.')
-  }
-  const response = await fetch(endpoint, {
-    method: 'POST',
-    headers: { 'content-type': 'application/json', accept: 'image/*', authorization: 'Bearer ' + config.launcherProviderToken },
-    body: JSON.stringify({
-      profileId: config.launcherProfileId,
-      requestId,
-      prompt: args.prompt,
-      negativePrompt: args.negativePrompt || '',
-      width: args.overrides?.width ?? config.sdxlWidth,
-      height: args.overrides?.height ?? config.sdxlHeight,
-    }),
-    signal: AbortSignal.timeout(185_000),
-  })
-  if (!response.ok) {
-    let detail = '런처 이미지 서비스 요청 실패(HTTP ' + response.status + ').'
-    try {
-      const body = await response.json() as { error?: unknown }
-      if (typeof body.error === 'string' && body.error.trim()) detail = body.error.trim().slice(0, 240)
-    } catch { /* keep the status-based diagnostic */ }
-    throw new Error(detail)
-  }
-  const mime = (response.headers.get('content-type') || '').split(';')[0]!.trim().toLowerCase()
-  if (!['image/png', 'image/jpeg', 'image/webp'].includes(mime)) {
-    throw new Error('런처 이미지 서비스가 지원하지 않는 이미지 MIME 형식을 반환했습니다.')
-  }
-  const declaredLength = Number(response.headers.get('content-length') || 0)
-  if (declaredLength > 25 * 1024 * 1024) throw new Error('생성 이미지가 25MB 제한을 초과했습니다.')
-  const bytes = Buffer.from(await response.arrayBuffer())
-  if (!bytes.length || bytes.length > 25 * 1024 * 1024) {
-    throw new Error('생성 이미지가 비어 있거나 25MB 제한을 초과했습니다.')
-  }
-  const extension = mime === 'image/jpeg' ? 'jpg' : mime === 'image/webp' ? 'webp' : 'png'
-  return { bytes, filename: 'launcher.' + extension }
-}
-
 export interface SubmitArgs {
   imageStudioReference?: ImageStudioReference
   talentId: string
@@ -302,14 +252,9 @@ export class JobRunner {
           if (this.stopped) { this.markCancelled(job, '서버가 종료되어 NAI 대기 요청을 중단했습니다.'); return }
           job.status = 'processing'
           try {
-            if (config.imageProvider === 'launcher') {
-              const rendered = await launcherGenerate(config, args, job.promptId)
-              await this.finalize(job, [{ filename: rendered.filename, subfolder: '', type: 'output' }], [], undefined, rendered.bytes)
-            } else {
-              const result = await NovelAI_이미지생성하기(config, job.prompt, job.negativePrompt || '', args.seed)
-              job.genParams = { ...job.genParams, seed: result.seed }
-              await this.finalize(job, [{ filename: 'novelai.png', subfolder: '', type: 'output' }], [], undefined, result.bytes)
-            }
+            const result = await NovelAI_이미지생성하기(config, job.prompt, job.negativePrompt || '', args.seed)
+            job.genParams = { ...job.genParams, seed: result.seed }
+            await this.finalize(job, [{ filename: 'novelai.png', subfolder: '', type: 'output' }], [], undefined, result.bytes)
           } catch (error) {
             job.status = 'error'; job.error = (error as Error).message; job.completedAt = this.now()
           }

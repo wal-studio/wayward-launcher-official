@@ -52,7 +52,7 @@ final class ImageGenBackendInstaller {
             if (!parent.canWrite()) throw new IllegalStateException("ImageGen 설치 상위 폴더에 쓰기 권한이 없습니다.");
 
             stage = "validate_existing_install";
-            if (isValidInstalled(destination)) return destination;
+            if (isValidInstalled(destination) && matchesBundledManifest(context, destination)) return destination;
 
             stage = "prepare_staging_directory";
             File staging = new File(parent, destination.getName() + ".installing");
@@ -131,6 +131,28 @@ final class ImageGenBackendInstaller {
             details.put("installTargetValid", target != null && isValidInstalled(target));
         } catch (Throwable ignored) {}
         return details;
+    }
+
+    private static boolean matchesBundledManifest(Context context, File root) {
+        if (context == null || root == null) return false;
+        try {
+            byte[] bundled;
+            try (InputStream in = context.getAssets().open(ASSET_ROOT + "/launcher-bundle.json");
+                 ByteArrayOutputStream out = new ByteArrayOutputStream()) {
+                byte[] buffer = new byte[8192];
+                int read;
+                while ((read = in.read(buffer)) >= 0) {
+                    if (read == 0) continue;
+                    if (out.size() + read > 65536) return false;
+                    out.write(buffer, 0, read);
+                }
+                bundled = out.toByteArray();
+            }
+            byte[] installed = Files.readAllBytes(new File(root, "launcher-bundle.json").toPath());
+            return MessageDigest.isEqual(bundled, installed);
+        } catch (Exception ignored) {
+            return false;
+        }
     }
 
     private static boolean assetExists(Context context, String path) {

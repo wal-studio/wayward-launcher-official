@@ -43,20 +43,8 @@ export function registerCatalogueRoutes(router: Router, deps: CatalogueDeps): vo
    */
   router.get('/api/image/health', async ctx => {
     const nai = config.imageProvider === 'nai'
-    const launcher = config.imageProvider === 'launcher'
-    let launcherUp = false
-    if (launcher && config.launcherProviderUrl) {
-      try {
-        const healthUrl = new URL('/health', config.launcherProviderUrl)
-        const response = await fetch(healthUrl, { signal: AbortSignal.timeout(1500) })
-        if (response.ok) {
-          const health = await response.json() as { ready?: boolean }
-          launcherUp = health.ready === true
-        }
-      } catch { /* unavailable native adapter */ }
-    }
-    const comfyUp = nai || launcher ? false : await comfy.isReachable()
-    const ready = nai ? Boolean(config.naiToken.trim()) : launcher ? launcherUp : comfyUp
+    const comfyUp = nai ? false : await comfy.isReachable()
+    const ready = nai ? Boolean(config.naiToken.trim()) : comfyUp
     sendJson(ctx.res, ready ? 200 : 503, {
       status: ready ? 'ok' : 'error',
       imageProvider: config.imageProvider,
@@ -64,13 +52,13 @@ export function registerCatalogueRoutes(router: Router, deps: CatalogueDeps): vo
       // 바닐라 게임과 기존 호환 모드는 이 필드를 '선택한 생성 엔진 준비됨'으로 사용합니다.
       // NAI도 connected로 응답해야 게임이 생성 요청을 보냅니다. 실제 방식은 별도 필드로 구분합니다.
       comfyui: ready ? 'connected' : 'unavailable',
-      comfyuiRequired: !nai && !launcher,
+      comfyuiRequired: !nai,
       server: 'wayward-imagegen',
       version: deps.version,
       // The bind address, so whoever finds this server on the port can tell
       // whether a phone on the LAN could reach it too (scripts/dev.ts).
       host: config.host,
-      capabilities: ['h-status-character-keys', 'shared-core-v1', 'img2img-reference-v1', 'novelai-v1', ...(launcher ? ['launcher-provider-v1'] : [])],
+      capabilities: ['h-status-character-keys', 'shared-core-v1', 'img2img-reference-v1', 'novelai-v1'],
       coreDirectory: deps.coreDirectory,
       extensions: deps.extensions?.() || [],
       images: cache.size,

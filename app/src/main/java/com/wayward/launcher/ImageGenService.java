@@ -274,7 +274,8 @@ public final class ImageGenService extends Service {
         if (stopping) return;
         if (!backendRoot.isDirectory()) throw new IllegalStateException("런처 내장 ImageGen 백엔드 폴더가 없습니다.");
         if (!"default".equals(launchMode) && !"novelai".equals(launchMode)
-                && !"comfy".equals(launchMode)) {
+                && !"comfy".equals(launchMode)
+                && !(BuildConfig.WAL_FLUX_TEST && "flux".equals(launchMode))) {
             throw new IllegalArgumentException("지원하지 않는 이미지 서버 실행 모드입니다.");
         }
         String comfyUrl = "comfy".equals(launchMode) ? ComfyEndpoint.normalizeOptional(requestedComfyUrl) : "";

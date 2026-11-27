@@ -25,7 +25,7 @@ assert.doesNotMatch(home, /여러 게임을 독립 세션으로 실행/, 'home m
 assert.match(main, /RUNNING_SESSIONS/, 'independent session tracking must remain implemented');
 assert.match(main, /launchProfileSession\(/, 'game launch/session behavior must remain implemented');
 assert.match(home, /이미지 생성 서버 실행/, 'home must expose the explicit local image-generation server switch');
-assert.match(main, /setContentDescription\("NovelAI 토큰 설정"\)/, 'the settings gear must be accessible');
+assert.match(main, /setContentDescription\(BuildConfig\.WAL_FLUX_TEST\?"FLUX Worker 주소 설정":"NovelAI 토큰 설정"\)/, 'the provider-specific settings gear must remain accessible');
 assert.match(main, /⚙/, 'the settings affordance must render as a gear icon');
 assert.match(main, /GlassButtonStyle\.bind\(this,b,false,12f\)/,
   'standard launcher buttons must use the common button style');
@@ -52,7 +52,7 @@ assert.doesNotMatch(glassStyle, /Color\.(?:BLUE|CYAN)|#(?:00|33|66)A(?:FF|E6|CC)
   'glass button material must not use a sky-blue gradient');
 assert.match(glassTileUi, /settingsAction!=null/,
   'the settings icon must be embedded inside the server glass button');
-assert.match(glassTileUi, /gear\.setContentDescription\("NovelAI 토큰 설정"\)/,
+assert.match(glassTileUi, /gear\.setContentDescription\(BuildConfig\.WAL_FLUX_TEST\?"FLUX Worker 주소 설정":"NovelAI 토큰 설정"\)/,
   'the embedded gear must remain accessible');
 assert.match(glassTileUi, /gear\.setOnClickListener\(view->settingsAction\.run\(\)\)/,
   'the embedded gear must open token settings independently');
