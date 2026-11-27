@@ -47,16 +47,7 @@
       backendVersion: String(status && status.backendVersion || ""),
       engine: runtimeEngine(status)
     };
-    try {
-      window.__WAYWARD_LAUNCHER_IMAGE_RUNTIME__ = Object.freeze({
-        available: result.available,
-        starting: result.starting,
-        ready: result.ready,
-        engine: result.engine,
-        offlineOnly: !result.ready
-      });
-      window.__WW_STUDIO_OFFLINE_ONLY__ = !result.ready;
-    } catch (_) {}
+
     return result;
   }
 
@@ -179,7 +170,6 @@
   installImageElementUrlRewrite();
 
   window.WaywardLauncherImageStudio = Object.freeze({
-    openGenerationSettings,
-    getRuntimeStatus: runtimeStatus
+    openGenerationSettings
   });
 })();
