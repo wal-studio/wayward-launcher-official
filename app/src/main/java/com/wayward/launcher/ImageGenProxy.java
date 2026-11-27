@@ -113,27 +113,6 @@ final class ImageGenProxy {
                     deliver(web, requestId, errorResponse(413, "ImageGen 요청 본문이 너무 큽니다."));
                     return;
                 }
-                if ("PUT".equals(safeMethod) && "/api/generation/settings".equals(Uri.parse(safePath).getPath())
-                        && requestBody.length > 0) {
-                    try {
-                        // The launcher owns the provider and credential. Game-side
-                        // EasyGen settings may tune generation options, but cannot
-                        // switch the engine or replace/clear the AndroidKeyStore token.
-                        JSONObject settings = new JSONObject(new String(requestBody, StandardCharsets.UTF_8));
-                        settings.remove("naiToken");
-                        settings.remove("naiTokenClear");
-                        settings.put("imageProvider", "nai");
-                        requestBody = settings.toString().getBytes(StandardCharsets.UTF_8);
-                        DiagnosticsLogger.event(appContext, "INFO", "imagegen_proxy",
-                                "game_generation_settings_locked_to_novelai", null);
-                    } catch (Exception settingsError) {
-                        DiagnosticsLogger.error(appContext, "imagegen_proxy",
-                                "generation_settings_policy_failed", settingsError);
-                        deliver(web, requestId, errorResponse(400, "게임 이미지 설정을 안전하게 처리하지 못했습니다."));
-                        return;
-                    }
-                }
-
                 URL url = new URL("http://127.0.0.1:8189" + safePath);
                 connection = (HttpURLConnection) url.openConnection();
                 connection.setConnectTimeout(CONNECT_TIMEOUT_MS);
