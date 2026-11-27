@@ -22,40 +22,50 @@ import java.util.Map;
 final class ImageGenProxy {
     private static final int CONNECT_TIMEOUT_MS = 10000;
     private static final int READ_TIMEOUT_MS = 15 * 60 * 1000;
-    private static final int MAX_REQUEST_BYTES = 8 * 1024 * 1024;
+    private static final int MAX_REQUEST_BYTES = 32 * 1024 * 1024;
     private static final int MAX_RESPONSE_BYTES = 64 * 1024 * 1024;
 
     private ImageGenProxy() {}
 
     static void dispatch(WebView web, String requestId, String method,
                          String pathAndQuery, String headersJson, String bodyBase64,
-                         boolean remotePcMode) {
+                         boolean hasBody, boolean remotePcMode) {
         if (web == null || requestId == null || !requestId.matches("[A-Za-z0-9._-]{1,80}")) return;
-        final String safeMethod = method == null ? "GET" : method.toUpperCase(Locale.ROOT);
+        final String safeMethod = method == null ? "GET" : method;
         final String safePath = validatePath(pathAndQuery);
-        if (safePath == null || !allowedMethod(safeMethod)) {
+        if (safePath == null || !validMethod(safeMethod)) {
             deliver(web, requestId, errorResponse(400, "허용되지 않은 ImageGen 요청입니다."));
             return;
         }
         final android.content.Context appContext=web.getContext().getApplicationContext();
         final String apiPath=Uri.parse(safePath).getPath();
         if (remotePcMode) {
-            if (!RemoteHostStore.isReady(appContext)) {
-                deliver(web, requestId, errorResponse(503,
-                        "PC 페어링과 승인된 PC 폴더 선택이 필요합니다."));
-                return;
-            }
             new Thread(() -> {
                 byte[] requestBody = null;
                 try {
                     requestBody = bodyBase64 == null || bodyBase64.isEmpty()
                             ? new byte[0] : Base64.decode(bodyBase64, Base64.DEFAULT);
-                    if (requestBody.length > 4 * 1024 * 1024) {
-                        deliver(web, requestId, errorResponse(413, "Remote ImageGen 요청이 4 MiB 제한을 초과했습니다."));
+                    if (requestBody.length > 32 * 1024 * 1024) {
+                        deliver(web, requestId, errorResponse(413, "Remote ImageGen 요청 본문이 32 MiB 제한을 초과했습니다."));
                         return;
                     }
-                    JSONObject envelope = RemoteGameImageApiClient.execute(
-                            appContext, safeMethod, safePath, requestBody);
+                    RemoteHostConnection host = RemoteHostStore.loadConnection(appContext);
+                    if (host == null) throw new java.io.IOException("PC Host 연결이 없습니다.");
+                    JSONObject rawHeaders = headersJson == null || headersJson.isEmpty()
+                            ? new JSONObject() : new JSONObject(headersJson);
+                    java.util.Map<String, String> forwardedHeaders = new java.util.HashMap<>();
+                    String contentType = null;
+                    java.util.Iterator<String> headerNames = rawHeaders.keys();
+                    while (headerNames.hasNext()) {
+                        String name = headerNames.next();
+                        String value = rawHeaders.optString(name, null);
+                        if (value == null) continue;
+                        forwardedHeaders.put(name, value);
+                        if ("content-type".equalsIgnoreCase(name)) contentType = value;
+                    }
+                    JSONObject envelope = RemoteHostClient.requestAuthenticatedRawEnvelope(
+                            appContext, host, "/v1/imagegen" + safePath, safeMethod,
+                            requestBody, hasBody, contentType, forwardedHeaders);
                     deliver(web, requestId, envelope.toString());
                     JSONObject diagnostic = new JSONObject();
                     try {
@@ -63,7 +73,7 @@ final class ImageGenProxy {
                         diagnostic.put("path", apiPath);
                         diagnostic.put("status", envelope.optInt("status", 502));
                     } catch (Exception ignored) {}
-                    DiagnosticsLogger.event(appContext, "INFO", "remote_game_image_api",
+                    DiagnosticsLogger.event(appContext, "INFO", "remote_imagegen_passthrough",
                             "authenticated_host_api_response", diagnostic);
                 } catch (Exception error) {
                     JSONObject diagnostic = new JSONObject();
@@ -74,12 +84,12 @@ final class ImageGenProxy {
                     } catch (Exception ignored) {}
                     DiagnosticsLogger.event(appContext, "ERROR", "remote_game_image_api",
                             "authenticated_host_api_error", diagnostic);
-                    deliver(web, requestId, RemoteGameImageApiClient.offlineResponse(
-                            error.getMessage() == null ? "Remote PC 이미지 API에 연결하지 못했습니다." : error.getMessage()).toString());
+                    deliver(web, requestId, errorResponse(502,
+                            error.getMessage() == null ? "Remote PC ImageGen 연결에 실패했습니다." : error.getMessage()));
                 } finally {
                     if (requestBody != null) java.util.Arrays.fill(requestBody, (byte) 0);
                 }
-            }, "wayward-remote-game-image-api").start();
+            }, "wayward-remote-imagegen-passthrough").start();
             return;
         }
         ImageGenStatusStore.State runtime=ImageGenStatusStore.read(appContext.getFilesDir());
@@ -103,27 +113,6 @@ final class ImageGenProxy {
                     deliver(web, requestId, errorResponse(413, "ImageGen 요청 본문이 너무 큽니다."));
                     return;
                 }
-                if ("PUT".equals(safeMethod) && "/api/generation/settings".equals(Uri.parse(safePath).getPath())
-                        && requestBody.length > 0) {
-                    try {
-                        // The launcher owns the provider and credential. Game-side
-                        // EasyGen settings may tune generation options, but cannot
-                        // switch the engine or replace/clear the AndroidKeyStore token.
-                        JSONObject settings = new JSONObject(new String(requestBody, StandardCharsets.UTF_8));
-                        settings.remove("naiToken");
-                        settings.remove("naiTokenClear");
-                        settings.put("imageProvider", "nai");
-                        requestBody = settings.toString().getBytes(StandardCharsets.UTF_8);
-                        DiagnosticsLogger.event(appContext, "INFO", "imagegen_proxy",
-                                "game_generation_settings_locked_to_novelai", null);
-                    } catch (Exception settingsError) {
-                        DiagnosticsLogger.error(appContext, "imagegen_proxy",
-                                "generation_settings_policy_failed", settingsError);
-                        deliver(web, requestId, errorResponse(400, "게임 이미지 설정을 안전하게 처리하지 못했습니다."));
-                        return;
-                    }
-                }
-
                 URL url = new URL("http://127.0.0.1:8189" + safePath);
                 connection = (HttpURLConnection) url.openConnection();
                 connection.setConnectTimeout(CONNECT_TIMEOUT_MS);
@@ -194,10 +183,8 @@ final class ImageGenProxy {
         return uri.getEncodedPath() + (uri.getEncodedQuery() == null ? "" : "?" + uri.getEncodedQuery());
     }
 
-    private static boolean allowedMethod(String method) {
-        return method.equals("GET") || method.equals("POST") || method.equals("PUT")
-                || method.equals("PATCH") || method.equals("DELETE") || method.equals("HEAD")
-                || method.equals("OPTIONS");
+    private static boolean validMethod(String method) {
+        return method != null && method.matches("[!#$%&'*+.^_`|~0-9A-Za-z-]{1,32}");
     }
 
     private static byte[] readLimited(InputStream in, int max) throws Exception {

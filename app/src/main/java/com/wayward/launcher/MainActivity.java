@@ -1473,6 +1473,12 @@ public class MainActivity extends Activity {
                         }
                         return folderHandler.serveGamePath(path.substring(6));
                     }
+                    if(path != null && path.startsWith("/v1/imagegen/images/") &&
+                            IMAGE_MODE_REMOTE_PC.equals(currentImageMode())) {
+                        return RemoteGameResourceBridge.serveImageGen(MainActivity.this,
+                                u.getEncodedPath() + (u.getEncodedQuery() == null ? "" : "?" + u.getEncodedQuery()),
+                                r.getRequestHeaders(), imageDiagnostics);
+                    }
                     if(path != null && path.startsWith("/images/__wayward_generated__/")) {
                         if(IMAGE_MODE_REMOTE_PC.equals(currentImageMode()))
                             return RemoteGameResourceBridge.serve(MainActivity.this,u.getEncodedPath(),r.getRequestHeaders(),imageDiagnostics);
@@ -2522,7 +2528,32 @@ public class MainActivity extends Activity {
         }
         @JavascriptInterface public String listImagePackDirectoryForRequest(String capability, String documentUri, String requestId){
             if (!hasImagePackBridgeCapability(capability)) return imagePackBridgeDenied();
-            return imagePackDirectoryAccess==null?"{\"ok\":false,\"name\":\"NotFoundError\"}":imagePackDirectoryAccess.listDirectoryJson(documentUri,requestId);
+            if (imagePackDirectoryAccess == null) return "{\"ok\":false,\"name\":\"NotFoundError\"}";
+            if (documentUri != null && documentUri.startsWith("__WAYWARD_DIR_START__:")) {
+                return imagePackDirectoryAccess.startListDirectory(
+                        documentUri.substring("__WAYWARD_DIR_START__:".length()), requestId);
+            }
+            if (documentUri != null && documentUri.startsWith("__WAYWARD_DIR_ACK__:")) {
+                try {
+                    int batchIndex = Integer.parseInt(
+                            documentUri.substring("__WAYWARD_DIR_ACK__:".length()));
+                    if (batchIndex < 0) throw new NumberFormatException("negative batch index");
+                    return imagePackDirectoryAccess.acknowledgeDirectoryBatch(requestId, batchIndex)
+                            ? "{\"ok\":true}"
+                            : "{\"ok\":false,\"name\":\"AbortError\",\"message\":\"The SAF batch is no longer active.\"}";
+                } catch (NumberFormatException invalidBatch) {
+                    return "{\"ok\":false,\"name\":\"TypeError\",\"message\":\"The SAF batch index is invalid.\"}";
+                }
+            }
+            if (documentUri != null && documentUri.startsWith("__WAYWARD_DIR_CANCEL__:")) {
+                boolean cancelled = imagePackDirectoryAccess.cancelDirectoryList(requestId);
+                return "{\"ok\":true,\"cancelled\":" + cancelled + "}";
+            }
+            if (documentUri != null && documentUri.startsWith("__WAYWARD_DIR_RELEASE__:")) {
+                imagePackDirectoryAccess.releaseDirectoryTreeForRequest(requestId);
+                return "{\"ok\":true}";
+            }
+            return imagePackDirectoryAccess.listDirectoryJson(documentUri,requestId);
         }
         @JavascriptInterface public String readImagePackFileForRequest(String capability, String documentUri, String requestId){
             if (!hasImagePackBridgeCapability(capability)) return imagePackBridgeDenied();
@@ -2613,9 +2644,9 @@ public class MainActivity extends Activity {
                 }
             });
         }
-        @JavascriptInterface public void imageGenProxyFetch(String requestId,String method,String path,String headersJson,String bodyBase64){
+        @JavascriptInterface public void imageGenProxyFetch(String requestId,String method,String path,String headersJson,String bodyBase64,boolean hasBody){
             boolean remotePcMode=IMAGE_MODE_REMOTE_PC.equals(currentImageMode());
-            ImageGenProxy.dispatch(web,requestId,method,path,headersJson,bodyBase64,remotePcMode);
+            ImageGenProxy.dispatch(web,requestId,method,path,headersJson,bodyBase64,hasBody,remotePcMode);
         }
         @JavascriptInterface public String imageGenRuntimeStatus(){
             boolean remotePcMode=IMAGE_MODE_REMOTE_PC.equals(currentImageMode());

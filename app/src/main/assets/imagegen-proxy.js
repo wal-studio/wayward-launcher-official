@@ -15,11 +15,6 @@
     } catch (_) {}
   }
 
-  function activeEngine() {
-    const runtime = window.__WAYWARD_LAUNCHER_IMAGE_RUNTIME__;
-    return runtime && typeof runtime.engine === "string" ? runtime.engine : "unknown";
-  }
-
   function bytesToBase64(buffer) {
     const bytes = new Uint8Array(buffer);
     let binary = "";
@@ -85,7 +80,6 @@
         requestId: id,
         method: request.method.toUpperCase(),
         path: url.pathname,
-        engine: activeEngine()
       };
       report("launcher_imagegen_request_intercepted", diagnostic);
       const headers = {};
@@ -101,7 +95,8 @@
           request.method,
           url.pathname + url.search,
           JSON.stringify(headers),
-          bytesToBase64(bodyBuffer)
+          bytesToBase64(bodyBuffer),
+          request.body !== null
         );
         report("launcher_imagegen_request_dispatched", diagnostic);
       } catch (error) {
@@ -111,7 +106,6 @@
           requestId: id,
           method: request.method.toUpperCase(),
           path: url.pathname,
-          engine: activeEngine(),
           errorType: error && error.name ? String(error.name) : "Error"
         });
         reject(error);
