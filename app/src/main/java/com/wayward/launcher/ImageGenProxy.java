@@ -22,7 +22,7 @@ import java.util.Map;
 final class ImageGenProxy {
     private static final int CONNECT_TIMEOUT_MS = 10000;
     private static final int READ_TIMEOUT_MS = 15 * 60 * 1000;
-    private static final int MAX_REQUEST_BYTES = 8 * 1024 * 1024;
+    private static final int MAX_REQUEST_BYTES = 32 * 1024 * 1024;
     private static final int MAX_RESPONSE_BYTES = 64 * 1024 * 1024;
 
     private ImageGenProxy() {}
