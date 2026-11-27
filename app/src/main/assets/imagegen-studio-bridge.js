@@ -599,30 +599,12 @@
     window.setTimeout(check, 500);
   }
 
+  // The launcher must not rewrite generation URLs, settings, provider selection,
+  // prompts, or Image Studio APIs. Keep only the generated-image display bridge.
   installImageElementUrlRewrite();
-  installGenerationFetchPolicy();
-  installLegacyApiHook();
-  installPauseSettingsFactoryHook();
-  installStudioBridgeHook();
-  installSettingsSaveProbe();
 
   window.WaywardLauncherImageStudio = Object.freeze({
     openGenerationSettings,
-    discoverNow,
-    refreshBackendProbe,
-    getDiscoveryStatus: () => ({ complete: discoveryComplete, result: discoveryResult }),
     getRuntimeStatus: runtimeStatus
   });
-
-  if (!window.__WAYWARD_IMAGE_STUDIO_TEST__) {
-    let attempts = 0;
-    const retry = async () => {
-      if (discoveryComplete || attempts >= 90) return;
-      attempts++;
-      const result = await discoverNow();
-      if (!result.ok || result.retry) window.setTimeout(retry, Math.min(5000, 500 + attempts * 100));
-    };
-    window.setTimeout(retry, 500);
-    watchManagedServer();
-  }
 })();
