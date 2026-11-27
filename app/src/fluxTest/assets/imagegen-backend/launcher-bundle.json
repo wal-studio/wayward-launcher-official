@@ -58,7 +58,7 @@
   "schemaVersion": 1,
   "sourceArchiveSha256": "dfd25e050dd0b98ec1c99c09634bd92b509efac428788273f84884e713e2c553",
   "sourceCommit": "26d6c32e0b0abbb886e3029efd548b7ca6774401",
-  "totalBytes": 347694,
+  "totalBytes": 347638,
   "removedLauncherPatches": [
     "add-launcher-provider-config",
     "load-launcher-provider-config",
