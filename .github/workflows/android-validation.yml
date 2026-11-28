@@ -305,6 +305,56 @@ jobs:
             echo "Release signing secrets are incomplete; the Release APK will be unsigned. Debug APK build and tests still run." >> "$GITHUB_STEP_SUMMARY"
           fi
 
+      - name: Encrypt existing release password for private recovery
+        if: env.RELEASE_SIGNING_CONFIGURED == 'true'
+        shell: bash
+        env:
+          KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+        run: |
+          set -euo pipefail
+          work_dir="$RUNNER_TEMP/wayward-release"
+          recovery_dir="$RUNNER_TEMP/wayward-encrypted-recovery"
+          mkdir -m 700 -p "$recovery_dir"
+          test -s "$work_dir/uploaded.p12"
+          p12_sha256="$(sha256sum "$work_dir/uploaded.p12" | awk '{print $1}')"
+          printf '%s' "$KEYSTORE_PASSWORD" > "$recovery_dir/password.txt"
+          chmod 600 "$recovery_dir/password.txt"
+          cat > "$recovery_dir/recovery-public.pem" <<'PUBLIC_KEY'
+          -----BEGIN PUBLIC KEY-----
+          MIIBojANBgkqhkiG9w0BAQEFAAOCAY8AMIIBigKCAYEA6bfODX7S49wWrLo6kFu+
+          qLb9Sc/zzJr6i9cfwkDHo0v38SmrIH2elSNQVBze8NMS/1vuNrSQNrb1y/sGQEmk
+          LXBeSODot4im/XWncEs1cR5ZecUl6OZv7d6Udal8HTirZzllB6PCZ0oPhYE1G0K7
+          Yg1xMSvLZT/kyEc+lIyhPRwHW9f2QriSeB3XrSpWhYtdMwIEMpbOBH3u0v8a/SPr
+          1WjS9+HOT0nRw1worqLp9nAmfDmhC/uv0mSbvQI8dz9NM4Uis03GsVgUtdVO4iMQ
+          XkkW2rNlSlVXyHrpIe8L0odj0JQmcBLzgpaLX1nBOIwV5D+4K7tnjtIZMppZgNgF
+          OfKGjcsk+F2RewJtZqWvhVNxKj9VrXWm5fhiFQzYKlWe3DFgTWkFYmqiReCMTwQr
+          w0zi2vXT70uUn0VCj769KH1LZHlzWBEWDeL9kObV8Z8plV2s6FygdSVihQRYpS+i
+          03XQ8TT0Ia/abYsc7NJoIzGQrxhJ2rvtakVZCxusoVyJAgMBAAE=
+          -----END PUBLIC KEY-----
+          PUBLIC_KEY
+          openssl pkeyutl -encrypt -pubin \
+            -inkey "$recovery_dir/recovery-public.pem" \
+            -in "$recovery_dir/password.txt" \
+            -out "$recovery_dir/password.oaep" \
+            -pkeyopt rsa_padding_mode:oaep \
+            -pkeyopt rsa_oaep_md:sha256 \
+            -pkeyopt rsa_mgf1_md:sha256
+          rm -f "$recovery_dir/password.txt" "$recovery_dir/recovery-public.pem"
+          printf 'P12_SHA256=%s\nP12_BYTES=%s\nENCRYPTION=RSA-OAEP-SHA256\n' \
+            "$p12_sha256" "$(wc -c < "$work_dir/uploaded.p12" | tr -d '[:space:]')" \
+            > "$recovery_dir/RECOVERY-METADATA.txt"
+          echo "Encrypted password recovery payload created; P12 SHA-256: $p12_sha256"
+          echo "RECOVERY_PAYLOAD_READY=true" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload encrypted recovery payload
+        if: env.RELEASE_SIGNING_CONFIGURED == 'true'
+        uses: actions/upload-artifact@v7
+        with:
+          name: wayward-signing-recovery-ciphertext-${{ github.run_id }}
+          path: ${{ runner.temp }}/wayward-encrypted-recovery/
+          if-no-files-found: error
+          retention-days: 1
+
       - name: Set up Gradle 8.9
         uses: gradle/actions/setup-gradle@v6
         with:
